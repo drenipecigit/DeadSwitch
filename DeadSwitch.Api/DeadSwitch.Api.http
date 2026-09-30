@@ -1,0 +1,6 @@
+@DeadSwitch.Api_HostAddress = http://localhost:5201
+
+GET {{DeadSwitch.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
