@@ -23,6 +23,12 @@ namespace DeadSwitch.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("CurrentStatus")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("LastCheckedAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("TEXT");

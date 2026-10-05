@@ -55,7 +55,7 @@ app.MapGet("/services", async (
     return Results.Ok(services);
 });
 
-// Endpoint 4: Check URL
+// Endpoint 4: Check URL manually
 app.MapGet("/check", async (
     string url,
     IHttpClientFactory httpClientFactory) =>
@@ -88,6 +88,57 @@ app.MapGet("/check", async (
             responseTimeMs = stopwatch.ElapsedMilliseconds
         });
     }
+});
+
+// Endpoint 5: Check registered service and save status
+app.MapGet("/services/{id:guid}/check", async (
+    Guid id,
+    MonitoredServiceService service,
+    IHttpClientFactory httpClientFactory) =>
+{
+    var monitoredService = await service.GetByIdAsync(id);
+
+    if (monitoredService is null)
+    {
+        return Results.NotFound(new
+        {
+            message = "Service not found"
+        });
+    }
+
+    var client = httpClientFactory.CreateClient();
+    var stopwatch = Stopwatch.StartNew();
+
+    string status;
+    int? statusCode;
+
+    try
+    {
+        var response = await client.GetAsync(monitoredService.Url);
+        stopwatch.Stop();
+
+        status = response.IsSuccessStatusCode ? "UP" : "DOWN";
+        statusCode = (int)response.StatusCode;
+    }
+    catch
+    {
+        stopwatch.Stop();
+
+        status = "DOWN";
+        statusCode = null;
+    }
+
+    var updatedService = await service.UpdateStatusAsync(id, status);
+
+    return Results.Ok(new
+    {
+        id = updatedService!.Id,
+        name = updatedService.Name,
+        url = updatedService.Url,
+        status = updatedService.CurrentStatus,
+        statusCode = statusCode,
+        responseTimeMs = stopwatch.ElapsedMilliseconds
+    });
 });
 
 app.Run();
