@@ -1,5 +1,5 @@
+using DeadSwitch.Api.Endpoints;
 using DeadSwitch.Api.Monitoring;
-using DeadSwitch.Api.Requests;
 using DeadSwitch.Application.Interfaces;
 using DeadSwitch.Application.Services;
 using DeadSwitch.Infrastructure.Data;
@@ -7,88 +7,104 @@ using DeadSwitch.Infrastructure.Monitoring;
 using DeadSwitch.Infrastructure.Repositories;
 using Microsoft.EntityFrameworkCore;
 
-var builder = WebApplication.CreateBuilder(args);
+WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+
 builder.Services.AddOpenApi();
+
+// Makes error responses use the standard Problem Details JSON format.
 builder.Services.AddProblemDetails();
+
+// TimeProvider instead of DateTime.UtcNow, so the tests can replace the clock with a fake.
 builder.Services.AddSingleton(TimeProvider.System);
+
+// Singleton, because the locks only work if the API and the worker share the same instance.
 builder.Services.AddSingleton<ServiceLocks>();
+
 builder.Services.AddDbContext<DeadSwitchDbContext>(options =>
-    options.UseSqlite(builder.Configuration.GetConnectionString("DeadSwitchDatabase")
-        ?? throw new InvalidOperationException("DeadSwitchDatabase connection string is required.")));
+{
+    string? connectionString = builder.Configuration.GetConnectionString("DeadSwitchDatabase");
+    if (connectionString == null)
+    {
+        throw new InvalidOperationException("DeadSwitchDatabase connection string is required.");
+    }
+
+    options.UseSqlite(connectionString);
+});
+
+// Scoped, because they use the DbContext, which must live for one request and no longer.
 builder.Services.AddScoped<IMonitoredServiceRepository, MonitoredServiceRepository>();
 builder.Services.AddScoped<MonitoredServiceService>();
+
+// Security-critical: this configuration is part of the SSRF protection. It is deliberately left
+// untouched until tests cover it, because no current test would notice if a line here was removed.
 builder.Services.AddHttpClient<IHealthProbe, HttpHealthProbe>(client =>
 {
+    // HttpClient's default limit of 100 seconds is turned off, because every service has its
+    // own timeout. HttpHealthProbe enforces that one with a CancellationToken.
     client.Timeout = Timeout.InfiniteTimeSpan;
     client.DefaultRequestHeaders.UserAgent.ParseAdd("DeadSwitch/1.0");
 }).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
 {
+    // A redirect could point to an internal address, so redirects are never followed.
     AllowAutoRedirect = false,
+    // A proxy would make the connection itself and bypass the address check below.
     UseProxy = false,
+    // A monitor has no use for cookies, and one service's cookies must never reach another.
     UseCookies = false,
+    // Replaces the normal connection step, so every address is checked before connecting.
     ConnectCallback = PublicInternetConnector.ConnectAsync,
+    // A reused connection skips ConnectCallback. This limits how long it is used before the
+    // address is checked again.
     PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+    // Known limitation: this also applies when a service's own TimeoutSeconds is higher.
     ConnectTimeout = TimeSpan.FromSeconds(10)
+    // Removes HttpClient's automatic logging, which writes every URL to the log on every check.
 }).RemoveAllLoggers();
-builder.Services.AddOptions<MonitoringOptions>().BindConfiguration("Monitoring")
-    .Validate(x => x.PollIntervalSeconds is >= 1 and <= 3600, "PollIntervalSeconds must be between 1 and 3600.")
+
+builder.Services.AddOptions<MonitoringOptions>()
+    .BindConfiguration("Monitoring")
+    .Validate(MonitoringOptions.HasValidPollInterval, "PollIntervalSeconds must be between 1 and 3600.")
+    // Without this, bad configuration is only discovered when the options are first used.
+    // With it, the application refuses to start.
     .ValidateOnStart();
+
 builder.Services.AddHostedService<MonitoringWorker>();
-var app = builder.Build();
+
+WebApplication app = builder.Build();
+
+// Turns unexpected exceptions into a 500 response in the Problem Details format.
 app.UseExceptionHandler();
+
+// Translates the exceptions the Application layer uses for expected errors into status codes.
 app.Use(async (context, next) =>
 {
-    try { await next(context); }
+    try
+    {
+        await next(context);
+    }
     catch (ArgumentException ex)
     {
-        await Results.Problem(statusCode: 400, title: "Invalid configuration", detail: ex.Message).ExecuteAsync(context);
+        IResult problem = Results.Problem(statusCode: 400, title: "Invalid configuration", detail: ex.Message);
+        await problem.ExecuteAsync(context);
     }
     catch (CheckInProgressException ex)
     {
-        await Results.Problem(statusCode: 409, title: "Check in progress", detail: ex.Message).ExecuteAsync(context);
+        IResult problem = Results.Problem(statusCode: 409, title: "Check in progress", detail: ex.Message);
+        await problem.ExecuteAsync(context);
     }
 });
-if (app.Environment.IsDevelopment()) app.MapOpenApi();
-app.MapGet("/health", () => Results.Ok(new { status = "UP", service = "DeadSwitch" }));
-app.MapPost("/services", async (RegisterServiceRequest request, MonitoredServiceService service, CancellationToken ct) =>
+
+if (app.Environment.IsDevelopment())
 {
-    var created = await service.RegisterAsync(request.ToConfiguration(), ct);
-    return Results.Created($"/services/{created.Id}", created);
-});
-app.MapGet("/services", async (MonitoredServiceService service, CancellationToken ct) => Results.Ok(await service.GetAllAsync(ct)));
-app.MapGet("/services/{id:guid}", async (Guid id, MonitoredServiceService service, CancellationToken ct) =>
-    await service.GetByIdAsync(id, ct) is { } item ? Results.Ok(item) : Results.NotFound());
-app.MapPut("/services/{id:guid}", async (Guid id, RegisterServiceRequest request, MonitoredServiceService service, CancellationToken ct) =>
-    await service.UpdateAsync(id, request.ToConfiguration(), ct) is { } item ? Results.Ok(item) : Results.NotFound());
-app.MapDelete("/services/{id:guid}", async (Guid id, MonitoredServiceService service, CancellationToken ct) =>
-    await service.DeleteAsync(id, ct) ? Results.NoContent() : Results.NotFound());
-app.MapPost("/services/{id:guid}/check", async (Guid id, MonitoredServiceService service, CancellationToken ct) =>
-    await service.CheckAsync(id, ct: ct) is { } record ? Results.Ok(record) : Results.NotFound());
-app.MapGet("/services/{id:guid}/history", async (Guid id, int? skip, int? take, MonitoredServiceService service, CancellationToken ct) =>
-{
-    var offset = skip ?? 0;
-    var limit = take ?? 50;
-    if (offset < 0 || limit is < 1 or > 200)
-        return Results.Problem(statusCode: 400, detail: "skip must be nonnegative and take must be between 1 and 200.");
-    if (await service.GetByIdAsync(id, ct) is null) return Results.NotFound();
-    return Results.Ok(await service.GetHistoryAsync(id, offset, limit, ct));
-});
-// Compatibility with the original read-triggered checks; use POST for new clients.
-app.MapGet("/services/{id:guid}/check", async (Guid id, MonitoredServiceService service, HttpContext context, CancellationToken ct) =>
-{
-    context.Response.Headers.CacheControl = "no-store";
-    var record = await service.CheckAsync(id, ct: ct);
-    if (record is null) return Results.NotFound();
-    var item = await service.GetByIdAsync(id, ct);
-    return Results.Ok(new { id, name = item?.Name, url = record.Url, status = record.Status,
-        record.StatusCode, record.ResponseTimeMs, lastCheckedAt = record.CheckedAtUtc, record.FailureReason });
-});
-app.MapGet("/check", async (string url, IHealthProbe probe, HttpContext context, CancellationToken ct) =>
-{
-    context.Response.Headers.CacheControl = "no-store";
-    UrlSafety.Validate(url);
-    var result = await probe.CheckAsync(url, 10, ct);
-    return Results.Ok(new { url, status = result.Status, result.StatusCode, result.ResponseTimeMs, result.FailureReason });
-});
+    app.MapOpenApi();
+}
+
+ServiceEndpoints.Map(app);
+
 app.Run();
-public partial class Program { }
+
+// The compiler generates the Program class as internal when top-level statements are used.
+// Making it public lets the test project start the API with WebApplicationFactory<Program>.
+public partial class Program
+{
+}
