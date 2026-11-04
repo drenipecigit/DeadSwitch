@@ -50,8 +50,20 @@ Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, s
 Date: 2026-11-04.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
-- `dotnet test DeadSwitch.slnx`: 196 passed, 0 failed.
-- Of the 196 tests, 130 only classify URLs and IP addresses, 17 run the real connection code against a local server, 9 test the probe with a stub handler, 7 test `ServiceLocks` directly, and 33 use the API, the worker or the migrations with a fake probe and an in-memory database.
+- `dotnet test DeadSwitch.slnx`: 203 passed, 0 failed.
+- Of the 203 tests, 130 only classify URLs and IP addresses, 17 run the real connection code against a local server, 16 test the probe with a stub handler, 7 test `ServiceLocks` directly, and 33 use the API, the worker or the migrations with a fake probe and an in-memory database.
+
+### Mutation check of the redirect status
+
+The code was broken on purpose, one change at a time, running all tests. The changes were never committed. All of them ran against the stub handler, and none of them touched the SSRF protection.
+
+| Change | Failing tests |
+|---|---|
+| 3xx is no longer counted as UP | 6 |
+| The lower limit becomes 301 | 1 |
+| The upper limit becomes 398 | 1 |
+| The upper limit becomes 400 | 1 |
+| The probe sends a second request on 3xx | 1 |
 
 ### Mutation check of the status enum
 
@@ -140,7 +152,7 @@ Done by the owner against a newly created database:
 
 - The background worker's loop against a real database.
 - A hostname on the real network that resolves to a private address. Tests cover this with `localhost` and a fake DNS.
-- A redirect from a real website. Tests cover this against a local server.
+- A redirect from a real website. Tests cover this in two separate parts, because `UrlSafety.Validate` stops the probe from reaching the local test server: the probe against a stub handler, and the real handler against a local server. No single test runs the whole chain.
 - The compatibility route and `GET /check` against the real network.
 
 ## Verified by tests
@@ -154,6 +166,7 @@ Done by the owner against a newly created database:
 - Locks exist only while in use. Requests with random ids and cancelled waiters leave nothing behind, and 50 callers on one service never overlap.
 - A worker pass (`RunPassAsync`) checks only enabled services that are due, and continues correctly after a restart.
 - The probe maps status codes, network failures and timeouts to the expected result.
+- A 3xx response is UP with its status code saved and no failure reason, the limits 299/300 and 399/400 are correct, and the probe sends only one request.
 - An address blocked at connection time and a rejected URL give UNKNOWN, through the real connector and `SocketsHttpHandler` for the blocked address. An empty DNS answer gives DOWN.
 - Status is `UP`, `DOWN` or `UNKNOWN` as text in the JSON of every check route, the service and the history, and as text in the database.
 - `AddMonitoringHistoryAndScheduling` keeps existing rows and pauses them.
@@ -177,7 +190,7 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | Manual check and history | Done | |
 | Background worker | Partial | The `ExecuteAsync` loop, error isolation between services and shutdown are untested |
 | No overlapping checks | Partial | Protects a single process only; see the lock limitation below |
-| Status UP / DOWN / UNKNOWN | Partial | 3xx is still DOWN; see below |
+| Status UP / DOWN / UNKNOWN | Done | Proven by tests. A 3xx from a real website has not been run |
 | History endpoint | **Bug, confirmed** | `POST /services/{id}/check` returns `checkedAtUtc` with `Z`, but `GET /services/{id}/history` returns the same time without `Z`. A client can read it as local time. Not fixed yet |
 | SSRF protection | Done for HTTP | Proven by tests against a local server. HTTPS through the connector is untested; see the security notes |
 | Tests for all of the above | Partial | See the gaps above |
@@ -191,9 +204,11 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | Timeout | DOWN | DOWN, proven by a test |
 | Connection, DNS or TLS failure, including an empty DNS answer | DOWN | DOWN, proven by tests |
 | Blocked address or rejected URL | UNKNOWN, because no request was sent and nothing was learned about the service | UNKNOWN, proven by tests |
-| 3xx response | UP, without following the redirect | **Still DOWN** until `fix/redirect-status` |
+| 3xx response | UP, without following the redirect | UP, proven by tests. The status code is saved, so the history shows that the answer was a redirect |
 
 Limitation of the 3xx decision: an answer of 3xx only proves that the server responded. The redirect target is never checked, so a redirect to a broken page still counts as UP. This must be documented in the README when it is built.
+
+Check records saved before this rule keep their old status: an earlier 3xx stays DOWN in the history. A service's current status changes at its next check.
 
 ## Known limitations
 
@@ -243,14 +258,14 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in this order. The MVP covers phases 1 to 4. Each task is one branch, with a plan approved first.
 
-**Next step:** `fix/redirect-status`.
+**Next step:** `test/worker-loop`.
 
 ### Phase 1: Stable foundation
 
 1. Done: `test/ssrf-real-handler`: move the handler configuration to Infrastructure and test redirects, private addresses and DNS rebinding against a local test server. Then bring the security code into the plain style, protected by those tests.
 2. Done: `fix/service-locks`: one lock per service, with a test that different services do not block each other.
 3. Done: `fix/status-enum`: add `ServiceStatus`. A timeout is DOWN and a blocked address is UNKNOWN.
-4. `fix/redirect-status`: 3xx is UP, without following the redirect. Document the limitation.
+4. Done: `fix/redirect-status`: 3xx is UP, without following the redirect. Document the limitation.
 5. `test/worker-loop`: test error isolation, shutdown and worker against manual check. Also investigate a finding from a manual run: with `intervalSeconds` = 10, the real interval was usually 15 seconds, over 16 checks. Unconfirmed hypothesis: the poll interval and the "due" comparison make a service miss a pass by a few milliseconds. Confirm the cause with a test, then fix it.
 6. `fix/api-contract`: dedicated validation exception, 400 on malformed JSON, safe `PUT` defaults, and UTC timestamps with `Z` (the confirmed bug above).
 
@@ -294,6 +309,7 @@ The phases are done in this order. The MVP covers phases 1 to 4. Each task is on
 |---|---|---|
 | 2 | Notifications are planned for UP to DOWN and DOWN to UP. A service going from UP to UNKNOWN can mean that its name now points to a private address, which is worth knowing | Not decided. Decide in phase 2 |
 | 3 | 3xx counts as UP and is not followed, so `http://example.com` answering 301 gives only the redirect's headers and no certificate. That would produce a misleading grade and false alarms | Grade only a real HTTPS response; anything else is "cannot be assessed". Decide in phase 3 |
+| 3 | Save the redirect target (`Location`) and warn when it suddenly points to another domain, because that can mean the site has been hijacked. The value comes from the monitored server and can contain internal addresses, so how it is stored and shown must be decided | Not decided and not built. Starting point: never follow the value, compare only the host, show it as plain text and never as a link, and hide a target that is not a public address. Legitimate moves, such as a new login domain or CDN, can cause false alarms |
 | 3 | A certificate is only visible during the TLS handshake, and a reused connection does no new handshake. "On each check" therefore does not work with pooled connections | Either turn off pooling for the probe, which also rechecks the address on every check, or use the most recently seen certificate. The cost of the first option has not been measured |
 | 4 | Docker tooling licence | Not settled. Nothing is installed until the licence has been confirmed |
 | 5 and 6 | A static page cannot hide an API key | Design the authentication with the dashboard in mind |
