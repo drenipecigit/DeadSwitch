@@ -19,6 +19,137 @@ public class MonitoringWorkerLoopTests
 
     private static readonly ProbeResult ServiceIsUp = new ProbeResult(ServiceStatus.Up, 200, 12, null);
 
+    // Repeats the manual run that found the bug: 16 checks with a 10 second interval and a 5 second
+    // poll, and a response time above zero. The passes are run by hand on the exact poll times,
+    // because moving the fake clock during a pass also moves the next tick of the fake timer.
+    [Fact]
+    public async Task ResponseTimeDoesNotPushTheNextCheckOnePollLater()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        await RegisterAsync(app, client, "Example");
+        using MonitoringWorker worker = app.CreateWorker();
+        List<DateTimeOffset> checkTimes = new List<DateTimeOffset>();
+        DateTimeOffset start = app.Clock.GetUtcNow();
+
+        Task<ProbeResult> ProbeThatTakesTwoHundredMilliseconds(CancellationToken ct)
+        {
+            checkTimes.Add(app.Clock.GetUtcNow());
+            app.Clock.Advance(TimeSpan.FromMilliseconds(200));
+            return Task.FromResult(ServiceIsUp);
+        }
+
+        app.Probe.Check = ProbeThatTakesTwoHundredMilliseconds;
+        await worker.RunPassAsync(CancellationToken.None);
+
+        for (int poll = 1; poll <= 30; poll++)
+        {
+            app.Clock.SetUtcNow(start.AddSeconds(poll * 5));
+            await worker.RunPassAsync(CancellationToken.None);
+        }
+
+        AssertEveryGapIs(TimeSpan.FromSeconds(10), checkTimes);
+        Assert.Equal(16, checkTimes.Count);
+    }
+
+    // Uses the default poll interval on purpose, because that is what a real run uses.
+    [Theory]
+    [InlineData(10)]
+    [InlineData(12)]
+    [InlineData(17)]
+    public async Task RealIntervalMatchesIntervalSecondsWithTheDefaultPoll(int intervalSeconds)
+    {
+        MonitoringOptions options = new MonitoringOptions();
+        int numberOfTicks = intervalSeconds * 3 / options.PollIntervalSeconds;
+
+        List<DateTimeOffset> checkTimes = await RunLoopAndGetCheckTimesAsync(options, intervalSeconds, numberOfTicks);
+
+        AssertEveryGapIs(TimeSpan.FromSeconds(intervalSeconds), checkTimes);
+        Assert.Equal(4, checkTimes.Count);
+    }
+
+    [Fact]
+    public async Task CheckThatTakesLongerThanTheIntervalIsFollowedByACheckInTheNextPass()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        await RegisterAsync(app, client, "Example");
+        using MonitoringWorker worker = app.CreateWorker();
+        DateTimeOffset start = app.Clock.GetUtcNow();
+
+        Task<ProbeResult> ProbeThatTakesThirtySeconds(CancellationToken ct)
+        {
+            app.Clock.Advance(TimeSpan.FromSeconds(30));
+            return Task.FromResult(ServiceIsUp);
+        }
+
+        app.Probe.Check = ProbeThatTakesThirtySeconds;
+        await worker.RunPassAsync(CancellationToken.None);
+        Assert.Equal(1, app.Probe.Calls);
+
+        app.Clock.SetUtcNow(start.AddSeconds(31));
+        await worker.RunPassAsync(CancellationToken.None);
+
+        Assert.Equal(2, app.Probe.Calls);
+    }
+
+    // A real timer never ticks at exactly the same millisecond, so this pass comes 2 ms too early.
+    [Fact]
+    public async Task PassThatComesAFewMillisecondsEarlyStillChecksTheService()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        await RegisterAsync(app, client, "Example");
+        using MonitoringWorker worker = app.CreateWorker();
+        DateTimeOffset start = app.Clock.GetUtcNow();
+
+        app.Clock.SetUtcNow(start.AddMilliseconds(2));
+        await worker.RunPassAsync(CancellationToken.None);
+        Assert.Equal(1, app.Probe.Calls);
+
+        app.Clock.SetUtcNow(start.AddSeconds(10));
+        await worker.RunPassAsync(CancellationToken.None);
+
+        Assert.Equal(2, app.Probe.Calls);
+    }
+
+    [Fact]
+    public async Task ServiceIsDueExactlyWhenOnlyTheToleranceRemains()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        await RegisterAsync(app, client, "Example");
+        using MonitoringWorker worker = app.CreateWorker();
+        DateTimeOffset start = app.Clock.GetUtcNow();
+        await worker.RunPassAsync(CancellationToken.None);
+
+        app.Clock.SetUtcNow(start.AddMilliseconds(9750));
+        await worker.RunPassAsync(CancellationToken.None);
+
+        Assert.Equal(2, app.Probe.Calls);
+    }
+
+    [Fact]
+    public async Task ServiceIsNotDueBeforeOnlyTheToleranceRemains()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        await RegisterAsync(app, client, "Example");
+        using MonitoringWorker worker = app.CreateWorker();
+        DateTimeOffset start = app.Clock.GetUtcNow();
+        await worker.RunPassAsync(CancellationToken.None);
+
+        app.Clock.SetUtcNow(start.AddMilliseconds(9740));
+        await worker.RunPassAsync(CancellationToken.None);
+
+        Assert.Equal(1, app.Probe.Calls);
+    }
+
     [Fact]
     public async Task FailingServiceDoesNotStopTheOthersAndIsRetriedOnTheNextPass()
     {
@@ -413,6 +544,52 @@ public class MonitoringWorkerLoopTests
         app.Clock.SetUtcNow(start.AddSeconds(18));
         await worker.RunPassAsync(CancellationToken.None);
         Assert.Equal(3, app.Probe.Calls);
+    }
+
+    // Runs the real loop for a number of ticks and returns the time every check started.
+    private static async Task<List<DateTimeOffset>> RunLoopAndGetCheckTimesAsync(
+        MonitoringOptions options,
+        int intervalSeconds,
+        int numberOfTicks)
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        ServiceConfiguration configuration = new ServiceConfiguration("Example", "https://example.com", intervalSeconds);
+        await app.RegisterServiceAsync(client, configuration);
+        TestLogger logger = new TestLogger();
+        using MonitoringWorker worker = app.CreateWorker(options, logger);
+        List<DateTimeOffset> checkTimes = new List<DateTimeOffset>();
+        DateTimeOffset start = app.Clock.GetUtcNow();
+
+        Task<ProbeResult> ProbeThatSavesTheTime(CancellationToken ct)
+        {
+            checkTimes.Add(app.Clock.GetUtcNow());
+            return Task.FromResult(ServiceIsUp);
+        }
+
+        app.Probe.Check = ProbeThatSavesTheTime;
+
+        await worker.StartAsync(CancellationToken.None);
+        await logger.WaitForPassToFinishAsync();
+
+        for (int tick = 1; tick <= numberOfTicks; tick++)
+        {
+            app.Clock.SetUtcNow(start.AddSeconds(tick * options.PollIntervalSeconds));
+            await logger.WaitForPassToFinishAsync();
+        }
+
+        await worker.StopAsync(CancellationToken.None);
+        return checkTimes;
+    }
+
+    private static void AssertEveryGapIs(TimeSpan expectedGap, List<DateTimeOffset> checkTimes)
+    {
+        for (int i = 1; i < checkTimes.Count; i++)
+        {
+            TimeSpan gap = checkTimes[i] - checkTimes[i - 1];
+            Assert.Equal(expectedGap, gap);
+        }
     }
 
     private static MonitoringWorker CreateWorkerThatPollsEverySecond(TestApp app, TestLogger logger)

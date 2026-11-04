@@ -5,6 +5,9 @@ namespace DeadSwitch.Application.Services;
 
 public class MonitoredServiceService
 {
+    // Passen kommer aldrig på exakt samma millisekund. Utan toleransen missas ett pass ibland.
+    private static readonly TimeSpan DueTolerance = TimeSpan.FromMilliseconds(250);
+
     private readonly IMonitoredServiceRepository _repository;
     private readonly IHealthProbe _probe;
     private readonly ServiceLocks _locks;
@@ -120,12 +123,14 @@ public class MonitoredServiceService
                 return null;
             }
 
+            // Read before the probe, so a check's time means when it started. If it meant when the
+            // check ended, every response time would push the next check later.
+            DateTimeOffset checkedAt = _clock.GetUtcNow();
+
             ProbeResult result = await _probe.CheckAsync(service.Url, service.TimeoutSeconds, ct);
 
             // A cancelled check says nothing about the service, so it must not be saved.
             ct.ThrowIfCancellationRequested();
-
-            DateTimeOffset checkedAt = _clock.GetUtcNow();
 
             CheckRecord record = new CheckRecord();
             record.Id = Guid.NewGuid();
@@ -169,7 +174,7 @@ public class MonitoredServiceService
         }
 
         DateTimeOffset nextCheckAt = service.LastCheckedAt.Value.AddSeconds(service.IntervalSeconds);
-        return _clock.GetUtcNow() >= nextCheckAt;
+        return _clock.GetUtcNow() + DueTolerance >= nextCheckAt;
     }
 
     private static void Apply(MonitoredService service, ServiceConfiguration configuration)
