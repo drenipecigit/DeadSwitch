@@ -3,4 +3,5 @@
   <Project Path="DeadSwitch.Application/DeadSwitch.Application.csproj" Id="451edc47-21b4-4588-ab1a-ecaeabb738f1" />
   <Project Path="DeadSwitch.Domain/DeadSwitch.Domain.csproj" />
   <Project Path="DeadSwitch.Infrastructure/DeadSwitch.Infrastructure.csproj" Id="1a51749b-c69b-4d26-84d1-b41ec161d946" />
+  <Project Path="DeadSwitch.Tests/DeadSwitch.Tests.csproj" />
 </Solution>

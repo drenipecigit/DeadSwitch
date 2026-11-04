@@ -1,7 +1,9 @@
-﻿namespace DeadSwitch.Api.Requests;
+using DeadSwitch.Application.Services;
 
-public class RegisterServiceRequest
+namespace DeadSwitch.Api.Requests;
+
+public record RegisterServiceRequest(string Name, string Url, int IntervalSeconds = 60,
+    int TimeoutSeconds = 10, bool IsEnabled = true)
 {
-    public string Name { get; set; } = string.Empty;
-    public string Url { get; set; } = string.Empty;
+    public ServiceConfiguration ToConfiguration() => new(Name, Url, IntervalSeconds, TimeoutSeconds, IsEnabled);
 }

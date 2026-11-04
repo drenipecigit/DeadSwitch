@@ -17,6 +17,42 @@ namespace DeadSwitch.Infrastructure.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.12");
 
+            modelBuilder.Entity("DeadSwitch.Domain.CheckRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CheckedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FailureReason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("MonitoredServiceId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("ResponseTimeMs")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("StatusCode")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Url")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MonitoredServiceId", "CheckedAtUtc");
+
+                    b.ToTable("CheckRecords");
+                });
+
             modelBuilder.Entity("DeadSwitch.Domain.MonitoredService", b =>
                 {
                     b.Property<Guid>("Id")
@@ -26,12 +62,27 @@ namespace DeadSwitch.Infrastructure.Migrations
                     b.Property<string>("CurrentStatus")
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("IntervalSeconds")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(60);
+
+                    b.Property<bool>("IsEnabled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(false);
+
                     b.Property<DateTimeOffset?>("LastCheckedAt")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("TimeoutSeconds")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(10);
 
                     b.Property<string>("Url")
                         .IsRequired()
@@ -40,6 +91,15 @@ namespace DeadSwitch.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("MonitoredServices");
+                });
+
+            modelBuilder.Entity("DeadSwitch.Domain.CheckRecord", b =>
+                {
+                    b.HasOne("DeadSwitch.Domain.MonitoredService", null)
+                        .WithMany()
+                        .HasForeignKey("MonitoredServiceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 #pragma warning restore 612, 618
         }
