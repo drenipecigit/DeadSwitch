@@ -13,7 +13,7 @@ DeadSwitch is a personal uptime monitor. The backend is **not finished**: see th
 | `DeadSwitch.Domain` | `MonitoredService`, `CheckRecord` | nothing |
 | `DeadSwitch.Application` | `MonitoredServiceService`, `ServiceConfiguration`, `UrlSafety`, `ServiceLocks`, interfaces | Domain |
 | `DeadSwitch.Infrastructure` | `DeadSwitchDbContext`, repository, `HttpHealthProbe`, `PublicInternetConnector`, migrations | Application, Domain |
-| `DeadSwitch.Api` | Endpoints, startup, `MonitoringWorker` | Application, Domain, Infrastructure |
+| `DeadSwitch.Api` | Startup in `Program.cs`, `ServiceEndpoints`, `MonitoringWorker` | Application, Domain, Infrastructure |
 | `DeadSwitch.Tests` | Automated tests | Api, and the other projects through it |
 
 ## Endpoints
@@ -40,17 +40,32 @@ DeadSwitch is a personal uptime monitor. The backend is **not finished**: see th
 | `AddLastCheckedAtToMonitoredService` | Adds `LastCheckedAt` |
 | `AddMonitoringHistoryAndScheduling` | Adds `IntervalSeconds`, `TimeoutSeconds` and `IsEnabled`, and creates `CheckRecords` with cascade delete. Existing rows stay paused because `IsEnabled` defaults to false |
 
-The application does not run migrations at startup. The local development database appears not to have the latest migration, judging only by its file timestamp; the database itself was not opened. Run `dotnet ef database update` before starting the API against it.
+The application does not run migrations at startup. Run `dotnet ef database update` when setting up a database. The local development database has been recreated from all migrations.
 
 ## Latest verified result
 
 Date: 2026-11-04.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
-- `dotnet test DeadSwitch.slnx`: 41 passed, 0 failed. Three consecutive runs were stable during the review.
-- Of the 41 tests, 25 only classify URLs and IP addresses, 7 test the probe with a stub handler, and 9 go through the API.
+- `dotnet test DeadSwitch.slnx`: 52 passed, 0 failed.
+- Of the 52 tests, 25 only classify URLs and IP addresses, 7 test the probe with a stub handler, and 20 use the API, the worker or the migrations with a fake probe and an in-memory database.
 
-**Never run so far:** the API against a real database, real outgoing network calls, the requests in `DeadSwitch.Api.http`, and the migration on a real database. The routes in the `.http` file were only compared with `Program.cs`.
+### Manual run
+
+Done by the owner against a newly created database:
+
+- The application starts.
+- CRUD works.
+- A manual check against `example.com` works.
+- Registering `127.0.0.1` returns 400. This proves the URL validation, not the check of resolved addresses at connection time.
+- A confirmed bug: see the history row in the MVP status.
+
+### Never run so far
+
+- The background worker's loop against a real database.
+- A hostname that resolves to a private address.
+- A real redirect.
+- The compatibility route and `GET /check` against the real network.
 
 ## Verified by tests
 
@@ -62,6 +77,7 @@ Date: 2026-11-04.
 - The probe maps status codes, network failures and timeouts to the expected result.
 - The latest migration keeps existing rows and pauses them.
 - URL validation and private-address classification.
+- The exact JSON field names of `/health`, `/check` and `GET /services/{id}/check`.
 
 Dependency injection lifetimes were reviewed by reading the code only.
 
@@ -74,7 +90,7 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | Background worker | Partial | The `ExecuteAsync` loop, error isolation between services and shutdown are untested |
 | No overlapping checks | Partial | Protects a single process only; see the lock limitation below |
 | Status UP / DOWN / UNKNOWN | Partial | Decided rules are not built yet; see below |
-| History endpoint | Partial | Timestamps read from SQLite probably lack the UTC marker; not yet confirmed by a run |
+| History endpoint | **Bug, confirmed** | `POST /services/{id}/check` returns `checkedAtUtc` with `Z`, but `GET /services/{id}/history` returns the same time without `Z`. A client can read it as local time. Not fixed yet |
 | SSRF protection | Not proven | The code exists, but no test exercises the real connection path |
 | Tests for all of the above | Partial | See the gaps above |
 | README | Missing | |
@@ -98,6 +114,14 @@ Limitation of the 3xx decision: an answer of 3xx only proves that the server res
 - `SocketsHttpHandler.ConnectTimeout` is 10 seconds, even when `TimeoutSeconds` is higher.
 - Status values are plain strings; there is no `ServiceStatus` enum.
 
+## Code style exceptions
+
+These parts do not yet follow the project's plain style, on purpose:
+
+- `UrlSafety`, `PublicInternetConnector` and the HTTP handler configuration in `Program.cs` are security-critical and have no tests for the real connection path. They have comments only, until step 1 below adds those tests.
+- `MonitoringWorker` keeps three `catch ... when` filters. Replacing them would duplicate the log lines.
+- The queries in the repository stay as LINQ, because EF Core translates them to SQL.
+
 ## Security notes
 
 Confirmed by reading the code, but **not proven by a test**:
@@ -111,20 +135,19 @@ Known problems:
 - Internal hostnames pass registration. They are stopped at connection time, after the DNS lookup has already been made.
 - The middleware in `Program.cs` catches every `ArgumentException`, so an internal error can become a 400 that shows its message.
 
-Untested assumptions:
-- Existing rows in a local database have not been reviewed. Review their URLs before enabling them.
+Untested assumption:
 - `168.63.129.16` (an Azure platform address) counts as public. This matters if the API is hosted on Azure.
 
 ## Next steps
 
 Each step is one branch, in priority order:
 
-1. `test/ssrf-real-handler`: move the handler configuration to Infrastructure and test it against a local test server.
+1. `test/ssrf-real-handler`: move the handler configuration to Infrastructure, test it against a local test server, and bring the security code into the plain style.
 2. `fix/service-locks`: one lock per service, with a test that different services do not block each other.
 3. `fix/status-enum`: add `ServiceStatus`; a blocked address becomes UNKNOWN.
 4. `fix/redirect-status`: 3xx becomes UP without following the redirect; document the limitation.
 5. `test/worker-loop`: test error isolation, shutdown and worker against manual check.
-6. `fix/api-contract`: dedicated validation exception, 400 on malformed JSON, safe `PUT` defaults, UTC timestamps.
+6. `fix/api-contract`: dedicated validation exception, 400 on malformed JSON, safe `PUT` defaults, and `Z` on history timestamps.
 7. `docs/readme`: how to run, migrate and test, plus all endpoints.
 
-After that: split `Program.cs` and the test files for readability, and add GitHub Actions once approved.
+After that: add GitHub Actions once approved.
