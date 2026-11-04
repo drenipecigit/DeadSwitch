@@ -101,8 +101,8 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | Case | Decided | Current behaviour |
 |---|---|---|
 | Timeout | DOWN | DOWN, already correct |
-| Blocked address | UNKNOWN | **Still DOWN** until step 3 below |
-| 3xx response | UP, without following the redirect | **Still DOWN** until step 4 below |
+| Blocked address | UNKNOWN | **Still DOWN** until `fix/status-enum` |
+| 3xx response | UP, without following the redirect | **Still DOWN** until `fix/redirect-status` |
 
 Limitation of the 3xx decision: an answer of 3xx only proves that the server responded. The redirect target is never checked, so a redirect to a broken page still counts as UP. This must be documented in the README when it is built.
 
@@ -118,7 +118,7 @@ Limitation of the 3xx decision: an answer of 3xx only proves that the server res
 
 These parts do not yet follow the project's plain style, on purpose:
 
-- `UrlSafety`, `PublicInternetConnector` and the HTTP handler configuration in `Program.cs` are security-critical and have no tests for the real connection path. They have comments only, until step 1 below adds those tests.
+- `UrlSafety`, `PublicInternetConnector` and the HTTP handler configuration in `Program.cs` are security-critical and have no tests for the real connection path. They have comments only, until `test/ssrf-real-handler` adds those tests.
 - `MonitoringWorker` keeps three `catch ... when` filters. Replacing them would duplicate the log lines.
 - The queries in the repository stay as LINQ, because EF Core translates them to SQL.
 
@@ -138,16 +138,62 @@ Known problems:
 Untested assumption:
 - `168.63.129.16` (an Azure platform address) counts as public. This matters if the API is hosted on Azure.
 
-## Next steps
+## Roadmap
 
-Each step is one branch, in priority order:
+DeadSwitch is growing into a tool that watches both the availability and the security configuration of web services, and says so when something goes wrong. The goal is not to sell it. The goal is a quality that a real development team would want to use internally. The code stays simple and readable: the difficulty belongs in the design decisions, not in the syntax.
 
-1. `test/ssrf-real-handler`: move the handler configuration to Infrastructure, test it against a local test server, and bring the security code into the plain style.
+The phases are done in this order. The MVP covers phases 1 to 4. Each task is one branch, with a plan approved first.
+
+**Next step:** `test/ssrf-real-handler`.
+
+### Phase 1: Stable foundation
+
+1. `test/ssrf-real-handler`: move the handler configuration to Infrastructure and test redirects, private addresses and DNS rebinding against a local test server. Then bring the security code into the plain style, protected by those tests.
 2. `fix/service-locks`: one lock per service, with a test that different services do not block each other.
-3. `fix/status-enum`: add `ServiceStatus`; a blocked address becomes UNKNOWN.
-4. `fix/redirect-status`: 3xx becomes UP without following the redirect; document the limitation.
-5. `test/worker-loop`: test error isolation, shutdown and worker against manual check.
-6. `fix/api-contract`: dedicated validation exception, 400 on malformed JSON, safe `PUT` defaults, and `Z` on history timestamps.
-7. `docs/readme`: how to run, migrate and test, plus all endpoints.
+3. `fix/status-enum`: add `ServiceStatus`. A timeout is DOWN and a blocked address is UNKNOWN.
+4. `fix/redirect-status`: 3xx is UP, without following the redirect. Document the limitation.
+5. `test/worker-loop`: test error isolation, shutdown and worker against manual check. Also investigate a finding from a manual run: with `intervalSeconds` = 10, the real interval was usually 15 seconds, over 16 checks. Unconfirmed hypothesis: the poll interval and the "due" comparison make a service miss a pass by a few milliseconds. Confirm the cause with a test, then fix it.
+6. `fix/api-contract`: dedicated validation exception, 400 on malformed JSON, safe `PUT` defaults, and UTC timestamps with `Z` (the confirmed bug above).
 
-After that: add GitHub Actions once approved.
+### Phase 2: Notifications
+
+- Notify on a status change, UP to DOWN and DOWN to UP, never on every check.
+- First channel: a Discord webhook, behind an `INotifier` interface in Application, so that more channels can be added without touching the core logic.
+- The webhook URL is a secret. It belongs in user secrets or environment variables, never in `appsettings.json` or git.
+- Tests use a fake notifier and make no real calls.
+
+### Phase 3: Security checks
+
+- TLS certificates: read the expiry date on each check, save it, and warn when fewer than a configurable number of days remain (default 14).
+- Security headers: check `Strict-Transport-Security`, `Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options` and `Referrer-Policy`. Give each service a simple grade and save which headers are missing.
+- Warn when a certificate is about to expire, or when a header has disappeared since the previous check.
+- All network traffic goes through the same SSRF protection as the health check. No new ways out.
+
+### Phase 4: DevOps
+
+- GitHub Actions: build and test on every push and pull request.
+- Dockerfile and docker-compose, with SQLite in a volume. Until phase 6 is done, compose binds to `127.0.0.1`, because the API has no authentication before then.
+- Migrations run in a controlled way at startup, or with a documented command. The choice is proposed and justified in this phase.
+- README: what the application does, how to run it locally and in Docker, all endpoints, and the security decisions.
+
+### Phase 5: Dashboard
+
+- A simple web page showing all services, status, response time, certificate days left and header grade.
+- The simplest technology that is enough, for example a static HTML page calling the API. No heavy frontend framework without a reason.
+- The README screenshot is added here, because there is nothing to show before the dashboard exists.
+
+### Phase 6: Ready for a team
+
+- Authentication, for example an API key, so that not just anyone can add services.
+- Rate limiting on `/check`.
+- A configurable allowlist for internal networks, off by default. A team must actively turn it on, and the README must explain the security risk.
+- Structured logging.
+
+### Open design decisions
+
+| Phase | Question | Current thinking |
+|---|---|---|
+| 3 | 3xx counts as UP and is not followed, so `http://example.com` answering 301 gives only the redirect's headers and no certificate. That would produce a misleading grade and false alarms | Grade only a real HTTPS response; anything else is "cannot be assessed". Decide in phase 3 |
+| 3 | A certificate is only visible during the TLS handshake, and a reused connection does no new handshake. "On each check" therefore does not work with pooled connections | Either turn off pooling for the probe, which also rechecks the address on every check, or use the most recently seen certificate. The cost of the first option has not been measured |
+| 4 | Docker tooling licence | Not settled. Nothing is installed until the licence has been confirmed |
+| 5 and 6 | A static page cannot hide an API key | Design the authentication with the dashboard in mind |
