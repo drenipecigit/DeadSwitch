@@ -19,6 +19,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="DeadSwitch.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\DeadSwitch.Application\DeadSwitch.Application.csproj" />
     <ProjectReference Include="..\DeadSwitch.Domain\DeadSwitch.Domain.csproj" />
   </ItemGroup>

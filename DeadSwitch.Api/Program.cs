@@ -35,31 +35,17 @@ builder.Services.AddDbContext<DeadSwitchDbContext>(options =>
 builder.Services.AddScoped<IMonitoredServiceRepository, MonitoredServiceRepository>();
 builder.Services.AddScoped<MonitoredServiceService>();
 
-// Security-critical: this configuration is part of the SSRF protection. It is deliberately left
-// untouched until tests cover it, because no current test would notice if a line here was removed.
 builder.Services.AddHttpClient<IHealthProbe, HttpHealthProbe>(client =>
 {
     // HttpClient's default limit of 100 seconds is turned off, because every service has its
     // own timeout. HttpHealthProbe enforces that one with a CancellationToken.
     client.Timeout = Timeout.InfiniteTimeSpan;
     client.DefaultRequestHeaders.UserAgent.ParseAdd("DeadSwitch/1.0");
-}).ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
-{
-    // A redirect could point to an internal address, so redirects are never followed.
-    AllowAutoRedirect = false,
-    // A proxy would make the connection itself and bypass the address check below.
-    UseProxy = false,
-    // A monitor has no use for cookies, and one service's cookies must never reach another.
-    UseCookies = false,
-    // Replaces the normal connection step, so every address is checked before connecting.
-    ConnectCallback = PublicInternetConnector.ConnectAsync,
-    // A reused connection skips ConnectCallback. This limits how long it is used before the
-    // address is checked again.
-    PooledConnectionLifetime = TimeSpan.FromMinutes(2),
-    // Known limitation: this also applies when a service's own TimeoutSeconds is higher.
-    ConnectTimeout = TimeSpan.FromSeconds(10)
+})
+    // Security-critical: the handler is what blocks private addresses and redirects.
+    .ConfigurePrimaryHttpMessageHandler(() => ProtectedHttpHandler.Create())
     // Removes HttpClient's automatic logging, which writes every URL to the log on every check.
-}).RemoveAllLoggers();
+    .RemoveAllLoggers();
 
 builder.Services.AddOptions<MonitoringOptions>()
     .BindConfiguration("Monitoring")

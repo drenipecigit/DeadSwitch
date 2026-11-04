@@ -8,15 +8,28 @@ namespace DeadSwitch.Infrastructure.Monitoring;
 // HttpClient calls this method instead of opening the connection itself.
 // The logic is deliberately left untouched and is not yet in the project's plain style:
 // it has no tests, so a rewrite could weaken the protection without any test noticing.
-public static class PublicInternetConnector
+internal sealed class PublicInternetConnector
 {
-    public static async ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken ct)
+    private readonly Func<string, CancellationToken, Task<IPAddress[]>> _resolveHost;
+    private readonly Func<IPAddress, bool> _isAllowedAddress;
+
+    // The DNS lookup and the address rule are parameters so the tests can run the real connection
+    // code against a local server. Production always passes the rules in ProtectedHttpHandler.Create.
+    public PublicInternetConnector(
+        Func<string, CancellationToken, Task<IPAddress[]>> resolveHost,
+        Func<IPAddress, bool> isAllowedAddress)
+    {
+        _resolveHost = resolveHost;
+        _isAllowedAddress = isAllowedAddress;
+    }
+
+    public async ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken ct)
     {
         // Checks the real addresses, because a hostname that looks public can point to a private one.
-        var addresses = await Dns.GetHostAddressesAsync(context.DnsEndPoint.Host, ct);
+        var addresses = await _resolveHost(context.DnsEndPoint.Host, ct);
         // One private address is enough to reject the host, because a real public service
         // has no reason to also point to an internal address.
-        if (addresses.Length == 0 || addresses.Any(ip => !UrlSafety.IsPublicAddress(ip)))
+        if (addresses.Length == 0 || addresses.Any(ip => !_isAllowedAddress(ip)))
             throw new HttpRequestException("Destination rejected.");
 
         // Connect to the validated IP itself; a second DNS lookup cannot bypass the policy.
