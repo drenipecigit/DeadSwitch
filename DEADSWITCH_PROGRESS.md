@@ -148,12 +148,17 @@ Done by the owner against a newly created database:
 - Registering `127.0.0.1` returns 400. This proves the URL validation, not the check of resolved addresses at connection time.
 - A confirmed bug: see the history row in the MVP status.
 
+Done by the owner on 2026-11-04:
+
+- `GET /check?url=http://github.com` returned UP with status code 301. This is a redirect from a real website through the whole chain, and the status code shows that the redirect was not followed.
+
 ### Never run so far
 
 - The background worker's loop against a real database.
 - A hostname on the real network that resolves to a private address. Tests cover this with `localhost` and a fake DNS.
-- A redirect from a real website. Tests cover this in two separate parts, because `UrlSafety.Validate` stops the probe from reaching the local test server: the probe against a stub handler, and the real handler against a local server. No single test runs the whole chain.
-- The compatibility route and `GET /check` against the real network.
+- The compatibility route against the real network.
+
+The automated tests still cover a redirect in two separate parts, because `UrlSafety.Validate` stops the probe from reaching the local test server: the probe against a stub handler, and the real handler against a local server. No single test runs the whole chain; only the manual run above does.
 
 ## Verified by tests
 
@@ -190,7 +195,7 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | Manual check and history | Done | |
 | Background worker | Partial | The `ExecuteAsync` loop, error isolation between services and shutdown are untested |
 | No overlapping checks | Partial | Protects a single process only; see the lock limitation below |
-| Status UP / DOWN / UNKNOWN | Done | Proven by tests. A 3xx from a real website has not been run |
+| Status UP / DOWN / UNKNOWN | Done | Proven by tests. A 3xx from a real website is confirmed by a manual run |
 | History endpoint | **Bug, confirmed** | `POST /services/{id}/check` returns `checkedAtUtc` with `Z`, but `GET /services/{id}/history` returns the same time without `Z`. A client can read it as local time. Not fixed yet |
 | SSRF protection | Done for HTTP | Proven by tests against a local server. HTTPS through the connector is untested; see the security notes |
 | Tests for all of the above | Partial | See the gaps above |
@@ -256,7 +261,7 @@ Untested assumption:
 
 DeadSwitch is growing into a tool that watches both the availability and the security configuration of web services, and says so when something goes wrong. The goal is not to sell it. The goal is a quality that a real development team would want to use internally. The code stays simple and readable: the difficulty belongs in the design decisions, not in the syntax.
 
-The phases are done in this order. The MVP covers phases 1 to 4. Each task is one branch, with a plan approved first.
+The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes early so that every new feature is visible in it at once. The MVP still covers phases 1 to 4; the dashboard is built earlier but is not part of the MVP. Each task is one branch, with a plan approved first.
 
 **Next step:** `test/worker-loop`.
 
@@ -276,25 +281,26 @@ The phases are done in this order. The MVP covers phases 1 to 4. Each task is on
 - The webhook URL is a secret. It belongs in user secrets or environment variables, never in `appsettings.json` or git.
 - Tests use a fake notifier and make no real calls.
 
+### Phase 5: Dashboard
+
+- A simple web page showing all services, status and response time. Phase 3 adds certificate days left and header grade to it.
+- The dashboard runs locally only until the authentication in phase 6 is done.
+- The simplest technology that is enough, for example a static HTML page calling the API. No heavy frontend framework without a reason.
+
 ### Phase 3: Security checks
 
 - TLS certificates: read the expiry date on each check, save it, and warn when fewer than a configurable number of days remain (default 14).
 - Security headers: check `Strict-Transport-Security`, `Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options` and `Referrer-Policy`. Give each service a simple grade and save which headers are missing.
 - Warn when a certificate is about to expire, or when a header has disappeared since the previous check.
 - All network traffic goes through the same SSRF protection as the health check. No new ways out.
+- The new values are added to the dashboard.
 
 ### Phase 4: DevOps
 
 - GitHub Actions: build and test on every push and pull request.
 - Dockerfile and docker-compose, with SQLite in a volume. Until phase 6 is done, compose binds to `127.0.0.1`, because the API has no authentication before then.
 - Migrations run in a controlled way at startup, or with a documented command. The choice is proposed and justified in this phase.
-- README: what the application does, how to run it locally and in Docker, all endpoints, and the security decisions.
-
-### Phase 5: Dashboard
-
-- A simple web page showing all services, status, response time, certificate days left and header grade.
-- The simplest technology that is enough, for example a static HTML page calling the API. No heavy frontend framework without a reason.
-- The README screenshot is added here, because there is nothing to show before the dashboard exists.
+- README: what the application does, how to run it locally and in Docker, all endpoints, and the security decisions, with a screenshot of the dashboard.
 
 ### Phase 6: Ready for a team
 
