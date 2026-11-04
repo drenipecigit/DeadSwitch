@@ -1,0 +1,443 @@
+using System.Net;
+using System.Net.Http.Json;
+using DeadSwitch.Api.Monitoring;
+using DeadSwitch.Application.Interfaces;
+using DeadSwitch.Application.Services;
+using DeadSwitch.Domain;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace DeadSwitch.Tests;
+
+// These tests run the real loop in ExecuteAsync through StartAsync and StopAsync. The fake clock
+// drives the timer, the fake probe replaces the network, and the database lives in memory.
+public class MonitoringWorkerLoopTests
+{
+    private static readonly TimeSpan OneSecond = TimeSpan.FromSeconds(1);
+
+    // The limit is only there so that a bug gives a red test instead of a test that hangs.
+    private static readonly TimeSpan SafetyLimit = TimeSpan.FromSeconds(10);
+
+    private static readonly ProbeResult ServiceIsUp = new ProbeResult(ServiceStatus.Up, 200, 12, null);
+
+    [Fact]
+    public async Task FailingServiceDoesNotStopTheOthersAndIsRetriedOnTheNextPass()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService first = await RegisterAsync(app, client, "A first");
+        MonitoredService second = await RegisterAsync(app, client, "B second");
+        TestLogger logger = new TestLogger();
+        using MonitoringWorker worker = CreateWorkerThatPollsEverySecond(app, logger);
+
+        Task<ProbeResult> ProbeThatFailsOnFirstCall(CancellationToken ct)
+        {
+            if (app.Probe.Calls == 1)
+            {
+                throw new InvalidOperationException("The service failed.");
+            }
+
+            return Task.FromResult(ServiceIsUp);
+        }
+
+        app.Probe.Check = ProbeThatFailsOnFirstCall;
+
+        await worker.StartAsync(CancellationToken.None);
+        await logger.WaitForPassToFinishAsync();
+
+        Assert.Equal(2, app.Probe.Calls);
+        Assert.Empty(await GetHistoryAsync(client, first));
+        Assert.Single(await GetHistoryAsync(client, second));
+        string error = Assert.Single(logger.GetErrors());
+        Assert.Contains(first.Id.ToString(), error);
+
+        app.Clock.Advance(OneSecond);
+        await logger.WaitForPassToFinishAsync();
+
+        // Only the failed service is due again, because its failed check saved nothing.
+        Assert.Equal(3, app.Probe.Calls);
+        Assert.Single(await GetHistoryAsync(client, first));
+
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task FailedPassIsLoggedAndTheNextPassStillRuns()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        await RegisterAsync(app, client, "Example");
+        TestLogger logger = new TestLogger();
+        using MonitoringWorker worker = CreateWorkerThatPollsEverySecond(app, logger);
+
+        app.RepositoryControl.FailGetAll = true;
+        await worker.StartAsync(CancellationToken.None);
+        await logger.WaitForPassToFinishAsync();
+
+        Assert.Equal(0, app.Probe.Calls);
+        Assert.Single(logger.GetErrors());
+
+        app.RepositoryControl.FailGetAll = false;
+        app.Clock.Advance(OneSecond);
+        await logger.WaitForPassToFinishAsync();
+
+        Assert.Equal(1, app.Probe.Calls);
+        Assert.Single(logger.GetErrors());
+
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task CancellationThatIsNotShutdownIsLoggedAndTheLoopContinues()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService service = await RegisterAsync(app, client, "Example");
+        TestLogger logger = new TestLogger();
+        using MonitoringWorker worker = CreateWorkerThatPollsEverySecond(app, logger);
+
+        Task<ProbeResult> ProbeThatIsCancelledOnFirstCall(CancellationToken ct)
+        {
+            if (app.Probe.Calls == 1)
+            {
+                throw new OperationCanceledException();
+            }
+
+            return Task.FromResult(ServiceIsUp);
+        }
+
+        app.Probe.Check = ProbeThatIsCancelledOnFirstCall;
+
+        await worker.StartAsync(CancellationToken.None);
+        await logger.WaitForPassToFinishAsync();
+
+        string error = Assert.Single(logger.GetErrors());
+        Assert.Contains(service.Id.ToString(), error);
+
+        app.Clock.Advance(OneSecond);
+        await logger.WaitForPassToFinishAsync();
+
+        Assert.Equal(2, app.Probe.Calls);
+
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task ServiceDeletedDuringThePassIsSkippedWithoutError()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        await RegisterAsync(app, client, "A first");
+        MonitoredService second = await RegisterAsync(app, client, "B second");
+        TestLogger logger = new TestLogger();
+        using MonitoringWorker worker = CreateWorkerThatPollsEverySecond(app, logger);
+
+        async Task<ProbeResult> ProbeThatDeletesTheSecondService(CancellationToken ct)
+        {
+            HttpResponseMessage deleted = await client.DeleteAsync($"/services/{second.Id}", ct);
+            deleted.EnsureSuccessStatusCode();
+            return ServiceIsUp;
+        }
+
+        app.Probe.Check = ProbeThatDeletesTheSecondService;
+
+        await worker.StartAsync(CancellationToken.None);
+        await logger.WaitForPassToFinishAsync();
+
+        Assert.Equal(1, app.Probe.Calls);
+        Assert.Empty(logger.GetErrors());
+
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task StoppingWhileWaitingForTheTimerEndsTheLoopWithoutError()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        TestLogger logger = new TestLogger();
+        using MonitoringWorker worker = CreateWorkerThatPollsEverySecond(app, logger);
+
+        await worker.StartAsync(CancellationToken.None);
+        await logger.WaitForPassToFinishAsync();
+        await worker.StopAsync(CancellationToken.None);
+
+        Assert.Equal(TaskStatus.RanToCompletion, worker.ExecuteTask!.Status);
+        Assert.Empty(logger.GetErrors());
+    }
+
+    [Fact]
+    public async Task StoppingDuringACheckSavesNothingAndLeavesNoLock()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService service = await RegisterAsync(app, client, "Example");
+        TestLogger logger = new TestLogger();
+        using MonitoringWorker worker = CreateWorkerThatPollsEverySecond(app, logger);
+        SemaphoreSlim probeStarted = new SemaphoreSlim(0);
+
+        async Task<ProbeResult> ProbeThatHangsUntilCancelled(CancellationToken ct)
+        {
+            probeStarted.Release();
+            await Task.Delay(Timeout.Infinite, ct);
+            return ServiceIsUp;
+        }
+
+        app.Probe.Check = ProbeThatHangsUntilCancelled;
+
+        await worker.StartAsync(CancellationToken.None);
+        await WaitForSignalAsync(probeStarted);
+        await worker.StopAsync(CancellationToken.None);
+
+        Assert.Equal(TaskStatus.RanToCompletion, worker.ExecuteTask!.Status);
+        Assert.Empty(logger.GetErrors());
+        Assert.Empty(await GetHistoryAsync(client, service));
+        ServiceLocks locks = app.Services.GetRequiredService<ServiceLocks>();
+        Assert.Equal(0, locks.ActiveCount);
+    }
+
+    [Fact]
+    public async Task StoppingAfterTheFirstServiceDoesNotCheckTheNext()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        await RegisterAsync(app, client, "A first");
+        await RegisterAsync(app, client, "B second");
+        TestLogger logger = new TestLogger();
+        using MonitoringWorker worker = CreateWorkerThatPollsEverySecond(app, logger);
+        Task stopping = Task.CompletedTask;
+
+        Task<ProbeResult> ProbeThatStopsTheWorker(CancellationToken ct)
+        {
+            // Not awaited here, because StopAsync waits for the pass that is running this probe.
+            stopping = worker.StopAsync(CancellationToken.None);
+            return Task.FromResult(ServiceIsUp);
+        }
+
+        app.Probe.Check = ProbeThatStopsTheWorker;
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!.WaitAsync(SafetyLimit);
+        await stopping;
+
+        Assert.Equal(1, app.Probe.Calls);
+        Assert.Empty(logger.GetErrors());
+    }
+
+    [Fact]
+    public async Task DisabledWorkerEndsAtOnceWithoutChecking()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        await RegisterAsync(app, client, "Example");
+        MonitoringOptions options = new MonitoringOptions();
+        options.Enabled = false;
+        using MonitoringWorker worker = app.CreateWorker(options, new TestLogger());
+
+        await worker.StartAsync(CancellationToken.None);
+        await worker.ExecuteTask!.WaitAsync(SafetyLimit);
+
+        Assert.Equal(0, app.Probe.Calls);
+    }
+
+    [Fact]
+    public async Task FirstPassRunsAtOnceWithoutWaitingForTheTimer()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        await RegisterAsync(app, client, "Example");
+        TestLogger logger = new TestLogger();
+        using MonitoringWorker worker = CreateWorkerThatPollsEverySecond(app, logger);
+
+        // The clock is never moved in this test, so the timer never ticks.
+        await worker.StartAsync(CancellationToken.None);
+        await logger.WaitForPassToFinishAsync();
+
+        Assert.Equal(1, app.Probe.Calls);
+
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task TicksDuringASlowCheckNeverStartASecondCheck()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        await RegisterAsync(app, client, "Example");
+        TestLogger logger = new TestLogger();
+        using MonitoringWorker worker = CreateWorkerThatPollsEverySecond(app, logger);
+        SemaphoreSlim probeStarted = new SemaphoreSlim(0);
+        SemaphoreSlim letProbeFinish = new SemaphoreSlim(0);
+        int runningChecks = 0;
+        int mostChecksAtOnce = 0;
+
+        async Task<ProbeResult> ProbeThatCountsRunningChecks(CancellationToken ct)
+        {
+            int running = Interlocked.Increment(ref runningChecks);
+            if (running > mostChecksAtOnce)
+            {
+                mostChecksAtOnce = running;
+            }
+
+            probeStarted.Release();
+            await letProbeFinish.WaitAsync(ct);
+            Interlocked.Decrement(ref runningChecks);
+            return ServiceIsUp;
+        }
+
+        app.Probe.Check = ProbeThatCountsRunningChecks;
+
+        await worker.StartAsync(CancellationToken.None);
+        await WaitForSignalAsync(probeStarted);
+
+        app.Clock.Advance(OneSecond);
+        app.Clock.Advance(OneSecond);
+        app.Clock.Advance(OneSecond);
+        letProbeFinish.Release();
+
+        // The first pass, and then one more for the ticks that came while it was running.
+        await logger.WaitForPassToFinishAsync();
+        await logger.WaitForPassToFinishAsync();
+
+        Assert.Equal(1, mostChecksAtOnce);
+        Assert.Equal(1, app.Probe.Calls);
+
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task WorkerSkipsServiceWithoutErrorWhileAManualCheckHoldsTheLock()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService service = await RegisterAsync(app, client, "Example");
+        TestLogger logger = new TestLogger();
+        using MonitoringWorker worker = CreateWorkerThatPollsEverySecond(app, logger);
+        SemaphoreSlim probeStarted = new SemaphoreSlim(0);
+        SemaphoreSlim letProbeFinish = new SemaphoreSlim(0);
+
+        async Task<ProbeResult> ProbeThatWaitsForTheTest(CancellationToken ct)
+        {
+            probeStarted.Release();
+            await letProbeFinish.WaitAsync(ct);
+            return ServiceIsUp;
+        }
+
+        app.Probe.Check = ProbeThatWaitsForTheTest;
+
+        Task<HttpResponseMessage> manualCheck = client.PostAsync($"/services/{service.Id}/check", null);
+        await WaitForSignalAsync(probeStarted);
+
+        await worker.StartAsync(CancellationToken.None);
+        await logger.WaitForPassToFinishAsync();
+
+        Assert.Equal(1, app.Probe.Calls);
+        Assert.Empty(logger.GetErrors());
+
+        letProbeFinish.Release();
+        HttpResponseMessage response = await manualCheck;
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task ManualCheckGets409WhileTheWorkerIsCheckingTheService()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService service = await RegisterAsync(app, client, "Example");
+        TestLogger logger = new TestLogger();
+        using MonitoringWorker worker = CreateWorkerThatPollsEverySecond(app, logger);
+        SemaphoreSlim probeStarted = new SemaphoreSlim(0);
+        SemaphoreSlim letProbeFinish = new SemaphoreSlim(0);
+
+        async Task<ProbeResult> ProbeThatWaitsForTheTest(CancellationToken ct)
+        {
+            probeStarted.Release();
+            await letProbeFinish.WaitAsync(ct);
+            return ServiceIsUp;
+        }
+
+        app.Probe.Check = ProbeThatWaitsForTheTest;
+
+        await worker.StartAsync(CancellationToken.None);
+        await WaitForSignalAsync(probeStarted);
+
+        HttpResponseMessage response = await client.PostAsync($"/services/{service.Id}/check", null);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal(1, app.Probe.Calls);
+
+        letProbeFinish.Release();
+        await logger.WaitForPassToFinishAsync();
+        Assert.Empty(logger.GetErrors());
+
+        await worker.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task ManualCheckMovesTheNextWorkerCheckForward()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService service = await RegisterAsync(app, client, "Example");
+        using MonitoringWorker worker = app.CreateWorker();
+        DateTimeOffset start = app.Clock.GetUtcNow();
+
+        await worker.RunPassAsync(CancellationToken.None);
+        Assert.Equal(1, app.Probe.Calls);
+
+        app.Clock.SetUtcNow(start.AddSeconds(8));
+        HttpResponseMessage manualCheck = await client.PostAsync($"/services/{service.Id}/check", null);
+        manualCheck.EnsureSuccessStatusCode();
+        Assert.Equal(2, app.Probe.Calls);
+
+        // The worker would have checked here if the manual check had not moved the time.
+        app.Clock.SetUtcNow(start.AddSeconds(10));
+        await worker.RunPassAsync(CancellationToken.None);
+        Assert.Equal(2, app.Probe.Calls);
+
+        app.Clock.SetUtcNow(start.AddSeconds(18));
+        await worker.RunPassAsync(CancellationToken.None);
+        Assert.Equal(3, app.Probe.Calls);
+    }
+
+    private static MonitoringWorker CreateWorkerThatPollsEverySecond(TestApp app, TestLogger logger)
+    {
+        MonitoringOptions options = new MonitoringOptions();
+        options.PollIntervalSeconds = 1;
+        return app.CreateWorker(options, logger);
+    }
+
+    private static async Task<MonitoredService> RegisterAsync(TestApp app, HttpClient client, string name)
+    {
+        ServiceConfiguration configuration = new ServiceConfiguration(name, "https://example.com", IntervalSeconds: 10);
+        return await app.RegisterServiceAsync(client, configuration);
+    }
+
+    private static async Task<List<CheckRecord>> GetHistoryAsync(HttpClient client, MonitoredService service)
+    {
+        List<CheckRecord>? history = await client.GetFromJsonAsync<List<CheckRecord>>($"/services/{service.Id}/history", TestJson.Options);
+        Assert.NotNull(history);
+        return history;
+    }
+
+    private static async Task WaitForSignalAsync(SemaphoreSlim signal)
+    {
+        bool signalled = await signal.WaitAsync(SafetyLimit);
+        Assert.True(signalled, "The expected step did not happen in time.");
+    }
+}

@@ -7,20 +7,28 @@ namespace DeadSwitch.Api.Monitoring;
 // A BackgroundService runs for as long as the application does, and is created only once.
 public sealed class MonitoringWorker : BackgroundService
 {
+    // A constant, because the tests wait for this exact log line to know that a pass is done.
+    public const string PassFinishedMessage = "Monitoring pass finished.";
+
     // The worker lives forever but the DbContext must be short-lived, so it cannot be injected
     // directly. The worker creates a new scope, and with it a new DbContext, for each piece of work.
     private readonly IServiceScopeFactory _scopes;
     private readonly IOptions<MonitoringOptions> _options;
     private readonly ILogger<MonitoringWorker> _logger;
 
+    // TimeProvider instead of the system clock, so the tests can move the timer by hand.
+    private readonly TimeProvider _clock;
+
     public MonitoringWorker(
         IServiceScopeFactory scopes,
         IOptions<MonitoringOptions> options,
-        ILogger<MonitoringWorker> logger)
+        ILogger<MonitoringWorker> logger,
+        TimeProvider clock)
     {
         _scopes = scopes;
         _options = options;
         _logger = logger;
+        _clock = clock;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -32,7 +40,8 @@ public sealed class MonitoringWorker : BackgroundService
 
         // PeriodicTimer waits without blocking a thread, and never starts a new tick
         // while the previous pass is still running.
-        using PeriodicTimer timer = new PeriodicTimer(TimeSpan.FromSeconds(_options.Value.PollIntervalSeconds));
+        TimeSpan pollInterval = TimeSpan.FromSeconds(_options.Value.PollIntervalSeconds);
+        using PeriodicTimer timer = new PeriodicTimer(pollInterval, _clock);
 
         try
         {
@@ -79,6 +88,8 @@ public sealed class MonitoringWorker : BackgroundService
             // Catches everything on purpose: one failed pass must not stop the monitoring.
             _logger.LogError(ex, "Monitoring pass failed; retrying on next poll.");
         }
+
+        _logger.LogDebug(PassFinishedMessage);
     }
 
     private async Task<List<Guid>> GetEnabledServiceIdsAsync(CancellationToken ct)

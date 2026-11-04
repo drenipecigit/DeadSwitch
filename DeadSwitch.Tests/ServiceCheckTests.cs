@@ -48,7 +48,7 @@ public class ServiceCheckTests
         HttpResponseMessage firstCheck = await client.PostAsync($"/services/{created.Id}/check", null);
         firstCheck.EnsureSuccessStatusCode();
 
-        app.Clock.Now = app.Clock.Now.AddSeconds(1);
+        app.Clock.Advance(TimeSpan.FromSeconds(1));
         app.Probe.Result = new ProbeResult(ServiceStatus.Down, 503, 31, "HTTP 503");
         HttpResponseMessage secondCheck = await client.PostAsync($"/services/{created.Id}/check", null);
         secondCheck.EnsureSuccessStatusCode();
@@ -71,7 +71,7 @@ public class ServiceCheckTests
         HttpResponseMessage firstCheck = await client.PostAsync($"/services/{created.Id}/check", null);
         firstCheck.EnsureSuccessStatusCode();
 
-        app.Clock.Now = app.Clock.Now.AddSeconds(1);
+        app.Clock.Advance(TimeSpan.FromSeconds(1));
         app.Probe.Result = new ProbeResult(ServiceStatus.Unknown, null, 3, "Destination address blocked by policy.");
         HttpResponseMessage secondCheck = await client.PostAsync($"/services/{created.Id}/check", null);
         secondCheck.EnsureSuccessStatusCode();

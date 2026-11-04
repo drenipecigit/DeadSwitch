@@ -4,6 +4,7 @@ using DeadSwitch.Application.Interfaces;
 using DeadSwitch.Application.Services;
 using DeadSwitch.Domain;
 using DeadSwitch.Infrastructure.Data;
+using DeadSwitch.Infrastructure.Repositories;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
@@ -11,8 +12,10 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 
 namespace DeadSwitch.Tests;
 
@@ -24,7 +27,11 @@ internal sealed class TestApp : WebApplicationFactory<Program>
     private readonly SqliteConnection _keeper;
 
     public TestProbe Probe { get; } = new TestProbe();
-    public TestClock Clock { get; } = new TestClock();
+
+    // Styr både klockan och timern, så att ett test kan flytta tiden utan att vänta på riktigt.
+    public FakeTimeProvider Clock { get; } = new FakeTimeProvider(new DateTimeOffset(2026, 11, 3, 12, 0, 0, TimeSpan.Zero));
+
+    public TestRepositoryControl RepositoryControl { get; } = new TestRepositoryControl();
 
     public TestApp()
     {
@@ -44,6 +51,9 @@ internal sealed class TestApp : WebApplicationFactory<Program>
             services.RemoveAll<DbContextOptions<DeadSwitchDbContext>>();
             services.RemoveAll<IDbContextOptionsConfiguration<DeadSwitchDbContext>>();
             services.AddDbContext<DeadSwitchDbContext>(options => options.UseSqlite(_keeper.ConnectionString));
+
+            services.RemoveAll<IMonitoredServiceRepository>();
+            services.AddScoped<IMonitoredServiceRepository>(provider => CreateTestRepository(provider));
 
             services.RemoveAll<IHealthProbe>();
             services.AddSingleton<IHealthProbe>(Probe);
@@ -72,9 +82,21 @@ internal sealed class TestApp : WebApplicationFactory<Program>
 
     public MonitoringWorker CreateWorker()
     {
+        return CreateWorker(new MonitoringOptions(), NullLogger<MonitoringWorker>.Instance);
+    }
+
+    public MonitoringWorker CreateWorker(MonitoringOptions monitoringOptions, ILogger<MonitoringWorker> logger)
+    {
         IServiceScopeFactory scopes = Services.GetRequiredService<IServiceScopeFactory>();
-        IOptions<MonitoringOptions> options = Options.Create(new MonitoringOptions());
-        return new MonitoringWorker(scopes, options, NullLogger<MonitoringWorker>.Instance);
+        IOptions<MonitoringOptions> options = Options.Create(monitoringOptions);
+        return new MonitoringWorker(scopes, options, logger, Clock);
+    }
+
+    private TestRepository CreateTestRepository(IServiceProvider provider)
+    {
+        DeadSwitchDbContext db = provider.GetRequiredService<DeadSwitchDbContext>();
+        MonitoredServiceRepository realRepository = new MonitoredServiceRepository(db);
+        return new TestRepository(realRepository, RepositoryControl);
     }
 
     public override async ValueTask DisposeAsync()

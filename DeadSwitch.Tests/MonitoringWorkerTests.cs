@@ -47,7 +47,7 @@ public class MonitoringWorkerTests
         await restartedWorker.RunPassAsync(CancellationToken.None);
         Assert.Equal(1, app.Probe.Calls);
 
-        app.Clock.Now = app.Clock.Now.AddSeconds(11);
+        app.Clock.Advance(TimeSpan.FromSeconds(11));
         await restartedWorker.RunPassAsync(CancellationToken.None);
         Assert.Equal(2, app.Probe.Calls);
     }
