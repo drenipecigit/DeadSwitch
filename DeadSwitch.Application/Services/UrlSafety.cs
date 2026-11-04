@@ -25,7 +25,8 @@ public static class UrlSafety
 
         // Uri has already rewritten odd forms: "http://2130706433" has become 127.0.0.1 here.
         // Trim removes the brackets an IPv6 host is written with, so only the address is compared.
-        var host = uri.DnsSafeHost.Trim('[', ']');
+        // A trailing dot is the same name in DNS: "localhost." is "localhost".
+        var host = uri.DnsSafeHost.Trim('[', ']').TrimEnd('.');
         if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
             host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase) ||
             (IPAddress.TryParse(host, out var address) && !IsPublicAddress(address)))
@@ -49,10 +50,10 @@ public static class UrlSafety
                 !(bytes[0] == 169 && bytes[1] == 254) &&
                 // 172.16.0.0/12: private.
                 !(bytes[0] == 172 && bytes[1] is >= 16 and <= 31) &&
-                // 192.168.x private, 192.0.x special-purpose and documentation, 192.88.99.x old relay.
-                // Known issue: 192.0.x and 192.2.x are wider than intended and also block public addresses.
-                !(bytes[0] == 192 && (bytes[1] == 168 || bytes[1] == 0 ||
-                    (bytes[1] == 2) || (bytes[1] == 88 && bytes[2] == 99))) &&
+                // 192.168.x private, 192.0.0.x special-purpose, 192.0.2.x documentation, 192.88.99.x old relay.
+                !(bytes[0] == 192 && (bytes[1] == 168 ||
+                    (bytes[1] == 0 && (bytes[2] == 0 || bytes[2] == 2)) ||
+                    (bytes[1] == 88 && bytes[2] == 99))) &&
                 // 198.18.0.0/15 benchmarking, 198.51.100.0/24 documentation.
                 !(bytes[0] == 198 && (bytes[1] is 18 or 19 || (bytes[1] == 51 && bytes[2] == 100))) &&
                 // 203.0.113.0/24: documentation.
