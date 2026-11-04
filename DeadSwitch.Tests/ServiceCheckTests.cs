@@ -108,6 +108,161 @@ public class ServiceCheckTests
         nextCheck.EnsureSuccessStatusCode();
     }
 
+    // Two random ids almost never collide, so two services would not prove anything here. The old
+    // design had 64 shared locks, so 65 services were guaranteed to make at least two share one.
+    [Fact]
+    public async Task ChecksOfManyDifferentServicesRunAtTheSameTime()
+    {
+        const int serviceCount = 65;
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        using CancellationTokenSource cancellation = new CancellationTokenSource();
+        TaskCompletionSource allStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int startedCount = 0;
+
+        app.Probe.Check = async cancellationToken =>
+        {
+            if (Interlocked.Increment(ref startedCount) == serviceCount)
+            {
+                allStarted.SetResult();
+            }
+
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return app.Probe.Result;
+        };
+
+        List<Task> checks = new List<Task>();
+        for (int i = 0; i < serviceCount; i++)
+        {
+            MonitoredService service = await app.RegisterServiceAsync(client, new ServiceConfiguration($"Service {i}", "https://example.com"));
+            checks.Add(CheckInOwnScopeAsync(app, service.Id, cancellation.Token));
+        }
+
+        await Task.WhenAny(allStarted.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+        cancellation.Cancel();
+
+        int rejectedCount = 0;
+        foreach (Task check in checks)
+        {
+            try
+            {
+                await check;
+            }
+            catch (CheckInProgressException)
+            {
+                rejectedCount++;
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected: this is how the hanging checks are ended.
+            }
+        }
+
+        Assert.Equal(0, rejectedCount);
+        Assert.Equal(serviceCount, startedCount);
+    }
+
+    [Fact]
+    public async Task UpdateDoesNotWaitForCheckOfAnotherService()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService checkedService = await app.RegisterServiceAsync(client, new ServiceConfiguration("Checked", "https://example.com"));
+        MonitoredService otherService = await app.RegisterServiceAsync(client, new ServiceConfiguration("Other", "https://example.com"));
+        using CancellationTokenSource cancellation = new CancellationTokenSource();
+        TaskCompletionSource started = HangProbeUntilCancelled(app.Probe);
+
+        Task check = CheckInOwnScopeAsync(app, checkedService.Id, cancellation.Token);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        ServiceConfiguration changed = new ServiceConfiguration("Changed", "https://example.com");
+        HttpResponseMessage update = await client.PutAsJsonAsync($"/services/{otherService.Id}", changed).WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(HttpStatusCode.OK, update.StatusCode);
+
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => check);
+    }
+
+    [Fact]
+    public async Task UpdateWaitsForRunningCheckOfSameService()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService service = await app.RegisterServiceAsync(client, new ServiceConfiguration("Example", "https://example.com"));
+        using CancellationTokenSource cancellation = new CancellationTokenSource();
+        TaskCompletionSource started = HangProbeUntilCancelled(app.Probe);
+
+        Task check = CheckInOwnScopeAsync(app, service.Id, cancellation.Token);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        ServiceConfiguration changed = new ServiceConfiguration("Changed", "https://example.com");
+        Task<HttpResponseMessage> update = client.PutAsJsonAsync($"/services/{service.Id}", changed);
+
+        // A short wait cannot prove "never", but an update that ignored the lock finishes well within it.
+        await Task.WhenAny(update, Task.Delay(TimeSpan.FromMilliseconds(300)));
+        Assert.False(update.IsCompleted);
+
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => check);
+
+        HttpResponseMessage response = await update.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DeleteWaitsForRunningCheckOfSameService()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService service = await app.RegisterServiceAsync(client, new ServiceConfiguration("Example", "https://example.com"));
+        using CancellationTokenSource cancellation = new CancellationTokenSource();
+        TaskCompletionSource started = HangProbeUntilCancelled(app.Probe);
+
+        Task check = CheckInOwnScopeAsync(app, service.Id, cancellation.Token);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Task<HttpResponseMessage> delete = client.DeleteAsync($"/services/{service.Id}");
+
+        // A short wait cannot prove "never", but a delete that ignored the lock finishes well within it.
+        await Task.WhenAny(delete, Task.Delay(TimeSpan.FromMilliseconds(300)));
+        Assert.False(delete.IsCompleted);
+
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => check);
+
+        HttpResponseMessage response = await delete.WaitAsync(TimeSpan.FromSeconds(5));
+        response.EnsureSuccessStatusCode();
+    }
+
+    // A lock is taken before the code knows whether the service exists. Requests with random ids
+    // must not leave anything behind, or anyone could make the memory grow.
+    [Fact]
+    public async Task CheckOfMissingServiceLeavesNoLockBehind()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+
+        HttpResponseMessage check = await client.PostAsync($"/services/{Guid.NewGuid()}/check", null);
+
+        Assert.Equal(HttpStatusCode.NotFound, check.StatusCode);
+        ServiceLocks locks = app.Services.GetRequiredService<ServiceLocks>();
+        Assert.Equal(0, locks.ActiveCount);
+    }
+
+    // Every check needs its own scope, because a DbContext must not be used by two checks at once.
+    private static async Task CheckInOwnScopeAsync(TestApp app, Guid id, CancellationToken cancellationToken)
+    {
+        await using AsyncServiceScope scope = app.Services.CreateAsyncScope();
+        MonitoredServiceService services = scope.ServiceProvider.GetRequiredService<MonitoredServiceService>();
+        await services.CheckAsync(id, ct: cancellationToken);
+    }
+
     // Makes the probe hang until cancelled. The returned source completes when the probe has started,
     // so the test knows the first check is running and holding its lock.
     private static TaskCompletionSource HangProbeUntilCancelled(TestProbe probe)

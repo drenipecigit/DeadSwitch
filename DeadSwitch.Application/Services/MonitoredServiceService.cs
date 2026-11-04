@@ -51,8 +51,7 @@ public class MonitoredServiceService
         configuration.Validate();
 
         // Wait for the lock, so an update never overwrites the result of a running check.
-        SemaphoreSlim gate = _locks.For(id);
-        await gate.WaitAsync(ct);
+        await _locks.EnterAsync(id, ct);
         try
         {
             MonitoredService? service = await _repository.GetByIdAsync(id, ct);
@@ -74,14 +73,13 @@ public class MonitoredServiceService
         }
         finally
         {
-            gate.Release();
+            _locks.Release(id);
         }
     }
 
     public async Task<bool> DeleteAsync(Guid id, CancellationToken ct = default)
     {
-        SemaphoreSlim gate = _locks.For(id);
-        await gate.WaitAsync(ct);
+        await _locks.EnterAsync(id, ct);
         try
         {
             MonitoredService? service = await _repository.GetByIdAsync(id, ct);
@@ -95,18 +93,15 @@ public class MonitoredServiceService
         }
         finally
         {
-            gate.Release();
+            _locks.Release(id);
         }
     }
 
     // Returns null both when the service does not exist and when onlyIfDue skips it.
     public async Task<CheckRecord?> CheckAsync(Guid id, bool onlyIfDue = false, CancellationToken ct = default)
     {
-        SemaphoreSlim gate = _locks.For(id);
-
-        // A wait of 0 means "take the lock only if it is free". A concurrent check is
-        // rejected instead of queuing another network request.
-        bool gotLock = await gate.WaitAsync(0, ct);
+        // A concurrent check is rejected instead of queuing another network request.
+        bool gotLock = _locks.TryEnter(id);
         if (!gotLock)
         {
             throw new CheckInProgressException();
@@ -151,7 +146,7 @@ public class MonitoredServiceService
         finally
         {
             // In finally, so the lock is released even when the check throws or is cancelled.
-            gate.Release();
+            _locks.Release(id);
         }
     }
 
