@@ -122,6 +122,8 @@ public class SsrfProtectionTests
         await Assert.ThrowsAsync<HttpRequestException>(() =>
             client.GetAsync($"http://mixed.test:{server.Port}/ok"));
 
+        // Without this line the test would also pass if the connector was never used.
+        Assert.Equal(1, dns.Calls);
         Assert.Equal(0, server.RequestCount);
     }
 
@@ -135,6 +137,8 @@ public class SsrfProtectionTests
         await Assert.ThrowsAsync<HttpRequestException>(() =>
             client.GetAsync($"http://empty.test:{server.Port}/ok"));
 
+        // Without this line the test would also pass if the connector was never used.
+        Assert.Equal(1, dns.Calls);
         Assert.Equal(0, server.RequestCount);
     }
 
@@ -188,8 +192,9 @@ public class SsrfProtectionTests
         Assert.Equal(1, server.RequestCount);
     }
 
-    // A rejected IPv6 literal must reach the address rule as the real address. No connection is
-    // made, because the rule says no.
+    // A rejected IPv6 literal must reach the address rule as the real address, without brackets.
+    // The address is loopback on purpose: if the protection ever breaks, this test must still not
+    // be able to send anything off this machine.
     [Fact]
     public async Task Ipv6LiteralIsJudgedAsItsOwnAddress()
     {
@@ -204,9 +209,9 @@ public class SsrfProtectionTests
         using HttpClient client = new HttpClient(ProtectedHttpHandler.Create(connector));
 
         await Assert.ThrowsAsync<HttpRequestException>(() =>
-            client.GetAsync("http://[2606:4700:4700::1111]/"));
+            client.GetAsync("http://[::1]/"));
 
-        Assert.Equal(new[] { IPAddress.Parse("2606:4700:4700::1111") }, judged);
+        Assert.Equal(new[] { IPAddress.IPv6Loopback }, judged);
     }
 
     [Fact]
