@@ -5,9 +5,7 @@ using DeadSwitch.Application.Services;
 namespace DeadSwitch.Infrastructure.Monitoring;
 
 // Security-critical: the last defence against SSRF, and it runs for every new connection.
-// HttpClient calls this method instead of opening the connection itself.
-// The logic is deliberately left untouched and is not yet in the project's plain style:
-// it has no tests, so a rewrite could weaken the protection without any test noticing.
+// HttpClient calls ConnectAsync instead of opening the connection itself.
 internal sealed class PublicInternetConnector
 {
     private readonly Func<string, CancellationToken, Task<IPAddress[]>> _resolveHost;
@@ -23,33 +21,62 @@ internal sealed class PublicInternetConnector
         _isAllowedAddress = isAllowedAddress;
     }
 
-    public async ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken ct)
+    public async ValueTask<Stream> ConnectAsync(SocketsHttpConnectionContext context, CancellationToken cancellationToken)
     {
         // Checks the real addresses, because a hostname that looks public can point to a private one.
-        var addresses = await _resolveHost(context.DnsEndPoint.Host, ct);
-        // One private address is enough to reject the host, because a real public service
-        // has no reason to also point to an internal address.
-        if (addresses.Length == 0 || addresses.Any(ip => !_isAllowedAddress(ip)))
+        IPAddress[] addresses = await _resolveHost(context.DnsEndPoint.Host, cancellationToken);
+
+        // The throw at the end of this method would also stop an empty answer today. This check is
+        // kept on purpose as defence in depth: it states the intent, and the protection must not
+        // depend on how the code further down happens to be written.
+        if (addresses.Length == 0)
+        {
             throw new HttpRequestException("Destination rejected.");
+        }
+
+        // All addresses are checked before any connection is tried. One private address is enough
+        // to reject the host, because a real public service has no reason to also point to an
+        // internal address.
+        foreach (IPAddress candidate in addresses)
+        {
+            if (!_isAllowedAddress(candidate))
+            {
+                throw new HttpRequestException("Destination rejected.");
+            }
+        }
 
         // Connect to the validated IP itself; a second DNS lookup cannot bypass the policy.
         // This is what stops DNS rebinding, where a host answers with a public address
         // for the check and a private address for the connection.
-        foreach (var address in addresses)
+        foreach (IPAddress address in addresses)
         {
+            Socket socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+
             // NoDelay sends small packets at once, which is what HttpClient's own connections do.
-            var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+            socket.NoDelay = true;
+
+            // "using" cannot be used here: the socket must be closed on failure, but must stay
+            // open when it is handed over to the stream.
             try
             {
-                await socket.ConnectAsync(new IPEndPoint(address, context.DnsEndPoint.Port), ct);
+                await socket.ConnectAsync(new IPEndPoint(address, context.DnsEndPoint.Port), cancellationToken);
+
                 // ownsSocket: closing the stream also closes the socket.
                 return new NetworkStream(socket, ownsSocket: true);
             }
-            // This address did not answer, so the loop tries the next one.
-            catch (SocketException) { socket.Dispose(); }
-            // Any other failure, such as cancellation, stops the attempt. The socket must still be closed.
-            catch { socket.Dispose(); throw; }
+            catch (SocketException)
+            {
+                // This address did not answer, so the loop tries the next one.
+                socket.Dispose();
+            }
+            catch (Exception)
+            {
+                // Any other failure, such as cancellation, stops the attempt.
+                socket.Dispose();
+                throw;
+            }
         }
+
         throw new HttpRequestException("No destination address could be reached.");
     }
 }
