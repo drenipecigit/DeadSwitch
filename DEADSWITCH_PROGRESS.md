@@ -12,7 +12,7 @@ DeadSwitch is a personal uptime monitor. The backend is **not finished**: see th
 |---|---|---|
 | `DeadSwitch.Domain` | `MonitoredService`, `CheckRecord` | nothing |
 | `DeadSwitch.Application` | `MonitoredServiceService`, `ServiceConfiguration`, `UrlSafety`, `ServiceLocks`, interfaces | Domain |
-| `DeadSwitch.Infrastructure` | `DeadSwitchDbContext`, repository, `HttpHealthProbe`, `PublicInternetConnector`, migrations | Application, Domain |
+| `DeadSwitch.Infrastructure` | `DeadSwitchDbContext`, repository, `HttpHealthProbe`, `ProtectedHttpHandler`, `PublicInternetConnector`, migrations | Application, Domain |
 | `DeadSwitch.Api` | Startup in `Program.cs`, `ServiceEndpoints`, `MonitoringWorker` | Application, Domain, Infrastructure |
 | `DeadSwitch.Tests` | Automated tests | Api, and the other projects through it |
 
@@ -47,8 +47,35 @@ The application does not run migrations at startup. Run `dotnet ef database upda
 Date: 2026-11-04.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
-- `dotnet test DeadSwitch.slnx`: 52 passed, 0 failed.
-- Of the 52 tests, 25 only classify URLs and IP addresses, 7 test the probe with a stub handler, and 20 use the API, the worker or the migrations with a fake probe and an in-memory database.
+- `dotnet test DeadSwitch.slnx`: 171 passed, 0 failed.
+- Of the 171 tests, 130 only classify URLs and IP addresses, 14 run the real connection code against a local server, 7 test the probe with a stub handler, and 20 use the API, the worker or the migrations with a fake probe and an in-memory database.
+
+### Mutation check of the SSRF protection
+
+The protection was broken on purpose, one change at a time, to confirm that the tests notice. The changes were never committed.
+
+| Change | Failing tests |
+|---|---|
+| Remove `ConnectCallback` | 12, **on an earlier version of the tests; see below** |
+| `AllowAutoRedirect = true` | 2 |
+| Remove the address check | 5 |
+| Check only the first address | 1 |
+| Add a second DNS lookup before connecting | 2 |
+| `Program.cs` stops using the protected handler | 3 |
+| The production rule allows every address | 2 |
+| `UseCookies = true` | 2 |
+| No fallback to the next address | 1 |
+| Remove the empty DNS answer check | 0; see "Code style exceptions" |
+| `172.16.0.0/12` one step too wide | 1 |
+| No handling of IPv4-mapped IPv6 | 1 |
+| No handling of a trailing dot | 3 |
+| `3fff::/20` one step too wide | 1 |
+| IPv6 allowlist without an upper limit | 3 |
+| Any port allowed | 1 |
+
+**Not verified on the current code:** removing `ConnectCallback`. Without the connector the handler looks up the tests' `.test` names through the machine's DNS resolver, so the run can send queries off the machine. Names under `.localhost` were considered as a replacement, but whether they stay on the machine could not be measured without administrator rights, so that was not assumed and the run was not repeated. Its one result is from before the refactoring and before the tests for mixed and empty DNS answers began to check that the connector is called.
+
+The tests were changed to send nothing off the machine even when the protection is broken, apart from that DNS lookup.
 
 ### Manual run
 
@@ -63,8 +90,8 @@ Done by the owner against a newly created database:
 ### Never run so far
 
 - The background worker's loop against a real database.
-- A hostname that resolves to a private address.
-- A real redirect.
+- A hostname on the real network that resolves to a private address. Tests cover this with `localhost` and a fake DNS.
+- A redirect from a real website. Tests cover this against a local server.
 - The compatibility route and `GET /check` against the real network.
 
 ## Verified by tests
@@ -76,7 +103,12 @@ Done by the owner against a newly created database:
 - A worker pass (`RunPassAsync`) checks only enabled services that are due, and continues correctly after a restart.
 - The probe maps status codes, network failures and timeouts to the expected result.
 - The latest migration keeps existing rows and pauses them.
-- URL validation and private-address classification.
+- URL validation, and address classification at the first and last address of every blocked range.
+- The handler the application registers blocks `127.0.0.1` and `localhost`, and the local server receives no request.
+- Redirects are returned and not followed, and cookies are not sent back.
+- A hostname pointing to a private address is blocked, as is a DNS answer with one forbidden address among several and an empty answer.
+- DNS rebinding: every new connection looks up and checks the address again, and connects to the checked address without a second lookup.
+- The next address is tried when the first does not answer.
 - The exact JSON field names of `/health`, `/check` and `GET /services/{id}/check`.
 
 Dependency injection lifetimes were reviewed by reading the code only.
@@ -91,7 +123,7 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | No overlapping checks | Partial | Protects a single process only; see the lock limitation below |
 | Status UP / DOWN / UNKNOWN | Partial | Decided rules are not built yet; see below |
 | History endpoint | **Bug, confirmed** | `POST /services/{id}/check` returns `checkedAtUtc` with `Z`, but `GET /services/{id}/history` returns the same time without `Z`. A client can read it as local time. Not fixed yet |
-| SSRF protection | Not proven | The code exists, but no test exercises the real connection path |
+| SSRF protection | Done for HTTP | Proven by tests against a local server. HTTPS through the connector is untested; see the security notes |
 | Tests for all of the above | Partial | See the gaps above |
 | README | Missing | |
 | GitHub Actions | Missing | Waits for the owner's approval |
@@ -111,26 +143,34 @@ Limitation of the 3xx decision: an answer of 3xx only proves that the server res
 - `ServiceLocks` shares 64 locks by hash, so two different services can share a lock. That can cause a false 409 or make an update wait for another service's check. With 10 services the chance of at least one collision is about 50 %.
 - Checks run one at a time, so slow services delay all the others.
 - History is never cleaned up and grows without limit.
-- `SocketsHttpHandler.ConnectTimeout` is 10 seconds, even when `TimeoutSeconds` is higher.
+- `SocketsHttpHandler.ConnectTimeout` is 10 seconds, even when `TimeoutSeconds` is higher. One address that never answers can use all of it before the next address is tried.
 - Status values are plain strings; there is no `ServiceStatus` enum.
 
 ## Code style exceptions
 
 These parts do not yet follow the project's plain style, on purpose:
 
-- `UrlSafety`, `PublicInternetConnector` and the HTTP handler configuration in `Program.cs` are security-critical and have no tests for the real connection path. They have comments only, until `test/ssrf-real-handler` adds those tests.
+- `PublicInternetConnector.ConnectAsync` keeps a `try`/`catch` around the socket instead of `using`. The socket must be closed on failure but stay open when it is handed to the stream.
+- `PublicInternetConnector.ConnectAsync` keeps an explicit check of an empty DNS answer, although the last line of the method would also stop one. This is defence in depth: it states the intent, and the protection must not depend on how the rest of the method is written. The tests therefore stay green if the check is removed.
 - `MonitoringWorker` keeps three `catch ... when` filters. Replacing them would duplicate the log lines.
 - The queries in the repository stay as LINQ, because EF Core translates them to SQL.
 
 ## Security notes
 
-Confirmed by reading the code, but **not proven by a test**:
-- Redirects, proxies and cookies are disabled.
+Proven by tests against a local server:
 - `PublicInternetConnector` resolves the host, rejects it if any address is non-public, then connects directly to a validated IP. This is the protection against DNS rebinding.
+- Redirects are not followed and cookies are not sent back.
+- The configuration lives in `ProtectedHttpHandler`. The version that accepts other address rules is `internal`, so only the test project can build a connector that allows private addresses.
+
+Checked as settings only, **not by running them**:
+- `UseProxy = false` and `PooledConnectionLifetime`. `ConnectTimeout` is not checked at all.
+
+Not proven by a test:
+- HTTPS through the connector. A test would have to change the certificate validation in the handler it is testing. To be covered in phase 3.
+- That the socket is closed when a connection attempt is cancelled.
+- That looking up `localhost` stays on the machine. The tests assume this and it has not been measured.
 
 Known problems:
-- No test exercises `PublicInternetConnector` or the handler configuration in `Program.cs`. The tests would stay green if either were removed.
-- `UrlSafety.IsPublicAddress` rejects all of `192.0.0.0/16` and `192.2.0.0/16`, which is wider than intended. This over-blocks public addresses and does not open a hole.
 - There is no authentication or rate limiting. `GET /check` is open, and `GET /services/{id}/check` writes data. This is acceptable on localhost only and must be solved before any deployment.
 - Internal hostnames pass registration. They are stopped at connection time, after the DNS lookup has already been made.
 - The middleware in `Program.cs` catches every `ArgumentException`, so an internal error can become a 400 that shows its message.
@@ -144,11 +184,11 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in this order. The MVP covers phases 1 to 4. Each task is one branch, with a plan approved first.
 
-**Next step:** `test/ssrf-real-handler`.
+**Next step:** `fix/service-locks`.
 
 ### Phase 1: Stable foundation
 
-1. `test/ssrf-real-handler`: move the handler configuration to Infrastructure and test redirects, private addresses and DNS rebinding against a local test server. Then bring the security code into the plain style, protected by those tests.
+1. Done: `test/ssrf-real-handler`: move the handler configuration to Infrastructure and test redirects, private addresses and DNS rebinding against a local test server. Then bring the security code into the plain style, protected by those tests.
 2. `fix/service-locks`: one lock per service, with a test that different services do not block each other.
 3. `fix/status-enum`: add `ServiceStatus`. A timeout is DOWN and a blocked address is UNKNOWN.
 4. `fix/redirect-status`: 3xx is UP, without following the redirect. Document the limitation.
