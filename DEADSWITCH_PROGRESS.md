@@ -50,8 +50,72 @@ Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, s
 Date: 2026-11-04.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
-- `dotnet test DeadSwitch.slnx`: 203 passed, 0 failed.
-- Of the 203 tests, 130 only classify URLs and IP addresses, 17 run the real connection code against a local server, 16 test the probe with a stub handler, 7 test `ServiceLocks` directly, and 33 use the API, the worker or the migrations with a fake probe and an in-memory database.
+- `dotnet test DeadSwitch.slnx`: 228 passed, 0 failed, five runs in a row.
+- Of the 228 tests, 130 only classify URLs and IP addresses, 17 run the real connection code against a local server, 16 test the probe with a stub handler, 7 test `ServiceLocks` directly, and 58 use the API, the worker or the migrations with a fake probe and an in-memory database.
+
+### Red runs of the check interval
+
+With a 5 second poll and a response time above zero, these tests failed against the old code. The cause of the 15 seconds found in the manual run is therefore confirmed.
+
+| Test case | Expected | Result on the old code |
+|---|---|---|
+| Interval 10, check takes 500 ms in the final test, 200 ms in the red run | 10 s | 15 s |
+| Interval 12 with the default poll, real loop | 12 s | 15 s |
+| Interval 17 with the default poll, real loop | 17 s | 20 s |
+| Check of 30 s with interval 10, next pass at 31 s | second check | no check |
+| Pass 2 ms early | second check | no check |
+| Pass at 9.75 s | second check | no check |
+
+There were three separate causes, each fixed by its own change, with the tests run after each one:
+
+1. The time was read after the probe, so every response time moved the next check past a poll. Reading it before the probe fixed the 500 ms and 30 s cases.
+2. A check can only start on a poll, so the interval was rounded up to a multiple of it. A default poll of 1 second fixed intervals 12 and 17.
+3. Two nearly equal times were compared, so a pass a few milliseconds early missed the check. A tolerance of 250 ms fixed the last two cases.
+
+Interval 10 with the default poll in the real loop was green on the old code, because that probe takes no time. The response time is tested with passes run by hand: moving the fake clock during a pass also moves the next tick of the fake timer. A tick expected at 20 s came at 20.2 s when measured. The real timer has not been measured.
+
+### Mutation check of the worker and the lock check
+
+The code was broken on purpose, one change at a time, running all tests. The changes were never committed. All of them ran against the fake probe, and none of them touched the SSRF protection.
+
+| Change | Failing tests |
+|---|---|
+| The time is read after the probe | 2 |
+| The default poll goes back to 5 | 2 |
+| Tolerance 0 | 2 |
+| Tolerance 300 ms | 1 |
+| `>=` becomes `>` in `IsDue` | 1 |
+| The timer does not use the injected clock | 1 |
+| The poll setting is ignored, always 5 | 7 |
+| The poll setting is ignored, always 1 | 0; see below |
+| The first pass waits for a tick | 14 |
+| No `catch (Exception)` per service | 2 |
+| No `catch (Exception)` per pass | 1 |
+| No `catch (CheckInProgressException)` | 1 |
+| Shutdown is not rethrown per service | 2 |
+| Shutdown is not rethrown per pass | 2 |
+| No `catch` in `ExecuteAsync` | 3 |
+| The `Enabled` check is removed | 2 |
+| `ThrowIfCancellationRequested` removed in `RunPassAsync` | 0; see below |
+| The `IsEnabled` filter removed in the worker | 0; see below |
+| The `IsDue` check before the lock is removed | 1 |
+| The whole block before the lock is removed, as before the fix | 3 |
+| The `IsDue` check after the lock is removed | 1 |
+| The check after the lock uses the first read | 1 |
+| The check before the lock also runs for manual checks | 11 |
+| The null check before the lock is removed | 1 |
+| A rejected lock is ignored | 3 |
+| The pass-finished line is not logged | 12 |
+
+The three rows with 0 failing tests:
+
+- The poll setting always 1: the tests only move the fake clock forwards, and showing that a tick did not happen would need a real wait. The default value and the upper limit of the setting are covered, a custom value below it is not.
+- `ThrowIfCancellationRequested`: the next call throws through the same token anyway, so the line changes nothing that can be observed. It stays because it stops the pass without opening a new scope.
+- The `IsEnabled` filter: `IsDue` makes the same check. The filter stays because it saves a read for paused services.
+
+The mutation that removes the `Enabled` check also starts the worker inside the test host, which is why a second test fails with it.
+
+The first mutation run found gaps in the tests, which were then closed. With a 200 ms probe, the tolerance hid a time read after the probe. A real timer ticking every second was fast enough to pass the loop tests, only slower. And removing the `IsDue` check before the lock passed the 409 test, because that test only stops the first read. The rows above come from the final tests.
 
 ### Mutation check of the redirect status
 
@@ -170,6 +234,12 @@ The automated tests still cover a redirect in two separate parts, because `UrlSa
 - An update or delete waits for a running check of the same service.
 - Locks exist only while in use. Requests with random ids and cancelled waiters leave nothing behind, and 50 callers on one service never overlap.
 - A worker pass (`RunPassAsync`) checks only enabled services that are due, and continues correctly after a restart.
+- The worker loop in `ExecuteAsync`, with a fake clock and a fake probe: the first pass runs at once, the timer follows the injected clock, and a slow check never overlaps another.
+- The real check interval matches `intervalSeconds` at 10, 12 and 17 seconds with the default poll in the loop, and over 16 checks at a 5 second poll and a 500 ms response time. A pass a few milliseconds early still checks the service, and a check is never more than 250 ms early.
+- One failing service does not stop the others and is tried again. A failed pass is logged and the next one runs. A cancellation that is not a shutdown is logged and the loop continues. A service deleted during a pass causes no error.
+- Shutdown while waiting and during a check ends the loop without error, saves nothing and leaves no lock. No further service is checked after a shutdown.
+- Worker against manual check: the worker skips a service with a manual check running, a manual check gets 409 while the worker checks the same service, and a manual check moves the next worker check forward.
+- A manual check gets no 409 during a pass where the service is not due, and the worker holds no lock in such a pass. If a manual check finishes after the worker's first read, the worker does not check again.
 - The probe maps status codes, network failures and timeouts to the expected result.
 - A 3xx response is UP with its status code saved and no failure reason, the limits 299/300 and 399/400 are correct, and the probe sends only one request.
 - An address blocked at connection time and a rejected URL give UNKNOWN, through the real connector and `SocketsHttpHandler` for the blocked address. An empty DNS answer gives DOWN.
@@ -193,7 +263,7 @@ Dependency injection lifetimes were reviewed by reading the code only.
 |---|---|---|
 | CRUD and validation | Partial | `PUT` without `isEnabled` enables a paused service. Malformed JSON is untested |
 | Manual check and history | Done | |
-| Background worker | Partial | The `ExecuteAsync` loop, error isolation between services and shutdown are untested |
+| Background worker | Proven by tests, manual run open | Loop, error isolation, shutdown and interval are proven with a fake clock. The real timer against a real database has not been run, so 250 ms is a judgement and real timer jitter is not measured |
 | No overlapping checks | Partial | Protects a single process only; see the lock limitation below |
 | Status UP / DOWN / UNKNOWN | Done | Proven by tests. A 3xx from a real website is confirmed by a manual run |
 | History endpoint | **Bug, confirmed** | `POST /services/{id}/check` returns `checkedAtUtc` with `Z`, but `GET /services/{id}/history` returns the same time without `Z`. A client can read it as local time. Not fixed yet |
@@ -220,7 +290,10 @@ Check records saved before this rule keep their old status: an earlier 3xx stays
 - `ServiceLocks` works within one process. Two running instances could check the same service at the same time. This is fine with SQLite and one container, but not for scaling out.
 - An update or delete waits for a running check of the same service, up to its `TimeoutSeconds`.
 - There is no limit on how many callers can wait for one lock, or on how many manual checks can run at once. Both remain open until authentication and rate limiting in phase 6.
-- The worker checks services one at a time, so slow services delay all the others.
+- The worker checks services one at a time, so slow services delay all the others. The real interval therefore only matches `intervalSeconds` while a pass is short.
+- A check can start up to 250 ms before its interval has passed.
+- The worker reads the service list once per second, reads every enabled service once per pass, and reads a service that is due once more.
+- A manual check gets 409 while the worker really is checking the same service, which is intended. A very short window also remains: a service that was due at the first read but not at the second holds the lock for a moment.
 - History is never cleaned up and grows without limit.
 - `SocketsHttpHandler.ConnectTimeout` is 10 seconds, even when `TimeoutSeconds` is higher. One address that never answers can use all of it before the next address is tried.
 - A value in a status column other than `UP`, `DOWN` or `UNKNOWN` makes reading that row fail. The application only writes these three, so this needs a manual edit of the database.
@@ -263,7 +336,7 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes early so that every new feature is visible in it at once. The MVP still covers phases 1 to 4; the dashboard is built earlier but is not part of the MVP. Each task is one branch, with a plan approved first.
 
-**Next step:** `test/worker-loop`.
+**Next step:** `fix/api-contract`.
 
 ### Phase 1: Stable foundation
 
@@ -271,8 +344,10 @@ The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes ea
 2. Done: `fix/service-locks`: one lock per service, with a test that different services do not block each other.
 3. Done: `fix/status-enum`: add `ServiceStatus`. A timeout is DOWN and a blocked address is UNKNOWN.
 4. Done: `fix/redirect-status`: 3xx is UP, without following the redirect. Document the limitation.
-5. `test/worker-loop`: test error isolation, shutdown and worker against manual check. Also investigate a finding from a manual run: with `intervalSeconds` = 10, the real interval was usually 15 seconds, over 16 checks. Unconfirmed hypothesis: the poll interval and the "due" comparison make a service miss a pass by a few milliseconds. Confirm the cause with a test, then fix it.
-6. `fix/api-contract`: dedicated validation exception, 400 on malformed JSON, safe `PUT` defaults, and UTC timestamps with `Z` (the confirmed bug above).
+5. Done: `test/worker-loop`: test error isolation, shutdown and worker against manual check. A manual run had shown that `intervalSeconds` = 10 usually became 15 seconds. The cause is confirmed and fixed; see "Red runs of the check interval". A manual run against a real database is still open.
+6. `fix/api-contract`: dedicated validation exception, 400 on malformed JSON, safe `PUT` defaults, and UTC timestamps with `Z` (the confirmed bug above). This task must start from the contract change below.
+
+**Contract change from `test/worker-loop`:** `checkedAtUtc` in the check responses and the history now means when the check **started**, not when it ended. The same applies to `lastCheckedAt` on the service and in the compatibility route. The field names and the format are unchanged. Check records saved before this change keep their end time. A record's end time is not stored, but it can be estimated by adding `responseTimeMs`.
 
 ### Phase 2: Notifications
 
