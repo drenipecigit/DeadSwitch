@@ -55,11 +55,11 @@ Date: 2026-11-04.
 
 ### Red runs of the check interval
 
-With a 5 second poll and a response time above zero, these tests failed against the old code. The cause of the 15 seconds found in the manual run is therefore confirmed.
+These tests failed against the old logic, which also gave 409 during a pass where the service is not due. The cause of the 15 seconds found in the manual run is therefore confirmed by tests with a fake clock.
 
 | Test case | Expected | Result on the old code |
 |---|---|---|
-| Interval 10, check takes 500 ms in the final test, 200 ms in the red run | 10 s | 15 s |
+| Interval 10, check takes 500 ms | 10 s | 15 s |
 | Interval 12 with the default poll, real loop | 12 s | 15 s |
 | Interval 17 with the default poll, real loop | 17 s | 20 s |
 | Check of 30 s with interval 10, next pass at 31 s | second check | no check |
@@ -88,7 +88,7 @@ The code was broken on purpose, one change at a time, running all tests. The cha
 | The timer does not use the injected clock | 1 |
 | The poll setting is ignored, always 5 | 7 |
 | The poll setting is ignored, always 1 | 0; see below |
-| The first pass waits for a tick | 14 |
+| The first pass waits for a tick | 15 |
 | No `catch (Exception)` per service | 2 |
 | No `catch (Exception)` per pass | 1 |
 | No `catch (CheckInProgressException)` | 1 |
@@ -105,7 +105,7 @@ The code was broken on purpose, one change at a time, running all tests. The cha
 | The check before the lock also runs for manual checks | 11 |
 | The null check before the lock is removed | 1 |
 | A rejected lock is ignored | 3 |
-| The pass-finished line is not logged | 12 |
+| The pass-finished line is not logged | 13 |
 
 The three rows with 0 failing tests:
 
@@ -113,9 +113,9 @@ The three rows with 0 failing tests:
 - `ThrowIfCancellationRequested`: the next call throws through the same token anyway, so the line changes nothing that can be observed. It stays because it stops the pass without opening a new scope.
 - The `IsEnabled` filter: `IsDue` makes the same check. The filter stays because it saves a read for paused services.
 
-The mutation that removes the `Enabled` check also starts the worker inside the test host, which is why a second test fails with it.
+The mutation that removes the `Enabled` check most likely also starts the worker inside the test host, which would explain why a second test fails with it. This has not been confirmed.
 
-The first mutation run found gaps in the tests, which were then closed. With a 200 ms probe, the tolerance hid a time read after the probe. A real timer ticking every second was fast enough to pass the loop tests, only slower. And removing the `IsDue` check before the lock passed the 409 test, because that test only stops the first read. The rows above come from the final tests.
+The first mutation run found gaps in the tests, which were then closed. With a 200 ms probe, the tolerance hid a time read after the probe. A real timer ticking every second was fast enough to pass the loop tests, only slower. And removing the `IsDue` check before the lock passed the 409 test, because that test only stops the first read. All rows above were run again on the final tests.
 
 ### Mutation check of the redirect status
 
