@@ -47,8 +47,8 @@ The application does not run migrations at startup. Run `dotnet ef database upda
 Date: 2026-11-04.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
-- `dotnet test DeadSwitch.slnx`: 171 passed, 0 failed.
-- Of the 171 tests, 130 only classify URLs and IP addresses, 14 run the real connection code against a local server, 7 test the probe with a stub handler, and 20 use the API, the worker or the migrations with a fake probe and an in-memory database.
+- `dotnet test DeadSwitch.slnx`: 172 passed, 0 failed.
+- Of the 172 tests, 130 only classify URLs and IP addresses, 15 run the real connection code against a local server, 7 test the probe with a stub handler, and 20 use the API, the worker or the migrations with a fake probe and an in-memory database.
 
 ### Mutation check of the SSRF protection
 
@@ -56,7 +56,7 @@ The protection was broken on purpose, one change at a time, to confirm that the 
 
 | Change | Failing tests |
 |---|---|
-| Remove `ConnectCallback` | 12, **on an earlier version of the tests; see below** |
+| Remove `ConnectCallback` | 8, with 3 tests left out; see below |
 | `AllowAutoRedirect = true` | 2 |
 | Remove the address check | 5 |
 | Check only the first address | 1 |
@@ -73,9 +73,17 @@ The protection was broken on purpose, one change at a time, to confirm that the 
 | IPv6 allowlist without an upper limit | 3 |
 | Any port allowed | 1 |
 
-**Not verified on the current code:** removing `ConnectCallback`. Without the connector the handler looks up the tests' `.test` names through the machine's DNS resolver, so the run can send queries off the machine. Names under `.localhost` were considered as a replacement, but whether they stay on the machine could not be measured without administrator rights, so that was not assumed and the run was not repeated. Its one result is from before the refactoring and before the tests for mixed and empty DNS answers began to check that the connector is called.
+The row for removing `ConnectCallback` was run on the current code and tests. The other rows were run on the same code, just before the test URLs changed from invented names to `127.0.0.1`.
 
-The tests were changed to send nothing off the machine even when the protection is broken, apart from that DNS lookup.
+Removing `ConnectCallback` needs extra care, because the handler then looks up names itself. The tests therefore use `127.0.0.1` in their URLs, which needs no lookup. Three tests need a name and carry the trait `NameLookupWithoutConnector`, so this run leaves them out:
+
+```powershell
+dotnet test DeadSwitch.slnx --filter "Category!=NameLookupWithoutConnector"
+```
+
+That run was watched from inside the test process with the .NET network events: 0 name lookups, and every connection went to `127.0.0.1` or `::1`. A control confirmed that the events do show a lookup. This covers the test process only, not all traffic from the machine.
+
+Whether names under `.localhost` stay on the machine could not be measured without administrator rights, so they are not used for this.
 
 ### Manual run
 
@@ -106,7 +114,7 @@ Done by the owner against a newly created database:
 - URL validation, and address classification at the first and last address of every blocked range.
 - The handler the application registers blocks `127.0.0.1` and `localhost`, and the local server receives no request.
 - Redirects are returned and not followed, and cookies are not sent back.
-- A hostname pointing to a private address is blocked, as is a DNS answer with one forbidden address among several and an empty answer.
+- A DNS answer with a private address is blocked, as is an answer with one forbidden address among several and an empty answer.
 - DNS rebinding: every new connection looks up and checks the address again, and connects to the checked address without a second lookup.
 - The next address is tried when the first does not answer.
 - The exact JSON field names of `/health`, `/check` and `GET /services/{id}/check`.
