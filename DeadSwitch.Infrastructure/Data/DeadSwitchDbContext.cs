@@ -5,17 +5,34 @@ namespace DeadSwitch.Infrastructure.Data;
 
 public class DeadSwitchDbContext(DbContextOptions<DeadSwitchDbContext> options) : DbContext(options)
 {
+    // Set<T>() asks EF Core for the table, so these properties need no setter of their own.
     public DbSet<MonitoredService> MonitoredServices => Set<MonitoredService>();
     public DbSet<CheckRecord> CheckRecords => Set<CheckRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
-        modelBuilder.Entity<MonitoredService>().Property(x => x.IntervalSeconds).HasDefaultValue(60);
-        modelBuilder.Entity<MonitoredService>().Property(x => x.TimeoutSeconds).HasDefaultValue(10);
+        modelBuilder.Entity<MonitoredService>()
+            .Property(service => service.IntervalSeconds)
+            .HasDefaultValue(60);
+
+        modelBuilder.Entity<MonitoredService>()
+            .Property(service => service.TimeoutSeconds)
+            .HasDefaultValue(10);
+
         // Existing services stay paused after the migration until explicitly enabled.
-        modelBuilder.Entity<MonitoredService>().Property(x => x.IsEnabled).HasDefaultValue(false);
-        modelBuilder.Entity<CheckRecord>().HasOne<MonitoredService>().WithMany()
-            .HasForeignKey(x => x.MonitoredServiceId).OnDelete(DeleteBehavior.Cascade);
-        modelBuilder.Entity<CheckRecord>().HasIndex(x => new { x.MonitoredServiceId, x.CheckedAtUtc });
+        modelBuilder.Entity<MonitoredService>()
+            .Property(service => service.IsEnabled)
+            .HasDefaultValue(false);
+
+        // Cascade: deleting a service also deletes its check records in the database.
+        modelBuilder.Entity<CheckRecord>()
+            .HasOne<MonitoredService>()
+            .WithMany()
+            .HasForeignKey(record => record.MonitoredServiceId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // The history endpoint filters on the service and sorts on time, so this index matches it.
+        modelBuilder.Entity<CheckRecord>()
+            .HasIndex(record => new { record.MonitoredServiceId, record.CheckedAtUtc });
     }
 }

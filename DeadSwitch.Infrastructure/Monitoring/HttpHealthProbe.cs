@@ -4,32 +4,63 @@ using DeadSwitch.Application.Services;
 
 namespace DeadSwitch.Infrastructure.Monitoring;
 
-public sealed class HttpHealthProbe(HttpClient client) : IHealthProbe
+public sealed class HttpHealthProbe : IHealthProbe
 {
+    private readonly HttpClient _client;
+
+    public HttpHealthProbe(HttpClient client)
+    {
+        _client = client;
+    }
+
     public async Task<ProbeResult> CheckAsync(string url, int timeoutSeconds, CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Stopwatch stopwatch = Stopwatch.StartNew();
+
+        // Linked: this token is cancelled both by the service's timeout and by the caller.
+        using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+
         try
         {
-            var uri = UrlSafety.Validate(url);
-            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
-            return new(response.IsSuccessStatusCode ? "UP" : "DOWN", (int)response.StatusCode,
-                stopwatch.ElapsedMilliseconds, response.IsSuccessStatusCode ? null : $"HTTP {(int)response.StatusCode}");
+            Uri uri = UrlSafety.Validate(url);
+            using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, uri);
+
+            // ResponseHeadersRead: stop waiting at the headers. The status code is all a health
+            // check needs, and a large body must not affect the measured time.
+            using HttpResponseMessage response = await _client.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                timeout.Token);
+
+            int statusCode = (int)response.StatusCode;
+            if (response.IsSuccessStatusCode)
+            {
+                return new ProbeResult("UP", statusCode, stopwatch.ElapsedMilliseconds, null);
+            }
+
+            return new ProbeResult("DOWN", statusCode, stopwatch.ElapsedMilliseconds, $"HTTP {statusCode}");
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
-            return new("DOWN", null, stopwatch.ElapsedMilliseconds, "Check timed out.");
+            // Both a timeout and a cancelled caller end up here, and only the caller's own token
+            // can tell them apart. A cancelled caller must not be saved as "the service is down".
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
+            return new ProbeResult("DOWN", null, stopwatch.ElapsedMilliseconds, "Check timed out.");
         }
         catch (HttpRequestException)
         {
-            return new("DOWN", null, stopwatch.ElapsedMilliseconds, "Connection, DNS, TLS or destination policy failure.");
+            // A fixed message, because the exception text could reveal details about internal hosts.
+            string failureReason = "Connection, DNS, TLS or destination policy failure.";
+            return new ProbeResult("DOWN", null, stopwatch.ElapsedMilliseconds, failureReason);
         }
         catch (ArgumentException)
         {
-            return new("DOWN", null, stopwatch.ElapsedMilliseconds, "URL rejected by destination policy.");
+            return new ProbeResult("DOWN", null, stopwatch.ElapsedMilliseconds, "URL rejected by destination policy.");
         }
     }
 }
