@@ -1,4 +1,5 @@
 using DeadSwitch.Application.Interfaces;
+using DeadSwitch.Application.Services;
 using DeadSwitch.Domain;
 
 namespace DeadSwitch.Tests;
@@ -8,11 +9,13 @@ internal sealed class TestRepository : IMonitoredServiceRepository
 {
     private readonly IMonitoredServiceRepository _real;
     private readonly TestRepositoryControl _control;
+    private readonly ServiceLocks _locks;
 
-    public TestRepository(IMonitoredServiceRepository real, TestRepositoryControl control)
+    public TestRepository(IMonitoredServiceRepository real, TestRepositoryControl control, ServiceLocks locks)
     {
         _real = real;
         _control = control;
+        _locks = locks;
     }
 
     public Task AddAsync(MonitoredService service, CancellationToken ct = default)
@@ -32,6 +35,9 @@ internal sealed class TestRepository : IMonitoredServiceRepository
 
     public async Task<MonitoredService?> GetByIdAsync(Guid id, CancellationToken ct = default)
     {
+        // Lets a test see whether anyone held a lock during this read.
+        _control.RememberLockCount(_locks.ActiveCount);
+
         // The data is read before the hold, so the caller gets the values from before the hold.
         MonitoredService? service = await _real.GetByIdAsync(id, ct);
         await _control.HoldIfRequestedAsync(ct);

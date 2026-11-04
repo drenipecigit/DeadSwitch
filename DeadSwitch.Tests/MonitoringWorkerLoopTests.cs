@@ -33,14 +33,15 @@ public class MonitoringWorkerLoopTests
         List<DateTimeOffset> checkTimes = new List<DateTimeOffset>();
         DateTimeOffset start = app.Clock.GetUtcNow();
 
-        Task<ProbeResult> ProbeThatTakesTwoHundredMilliseconds(CancellationToken ct)
+        // Half a second, because a shorter response time would be hidden by the tolerance in IsDue.
+        Task<ProbeResult> ProbeThatTakesHalfASecond(CancellationToken ct)
         {
             checkTimes.Add(app.Clock.GetUtcNow());
-            app.Clock.Advance(TimeSpan.FromMilliseconds(200));
+            app.Clock.Advance(TimeSpan.FromMilliseconds(500));
             return Task.FromResult(ServiceIsUp);
         }
 
-        app.Probe.Check = ProbeThatTakesTwoHundredMilliseconds;
+        app.Probe.Check = ProbeThatTakesHalfASecond;
         await worker.RunPassAsync(CancellationToken.None);
 
         for (int poll = 1; poll <= 30; poll++)
@@ -397,6 +398,30 @@ public class MonitoringWorkerLoopTests
         await worker.StopAsync(CancellationToken.None);
     }
 
+    // A poll of one hour, so a timer on the real clock could never tick before the safety limit.
+    [Fact]
+    public async Task TimerFollowsTheInjectedClockAndNotTheRealTime()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        await RegisterAsync(app, client, "Example");
+        TestLogger logger = new TestLogger();
+        MonitoringOptions options = new MonitoringOptions();
+        options.PollIntervalSeconds = 3600;
+        using MonitoringWorker worker = app.CreateWorker(options, logger);
+
+        await worker.StartAsync(CancellationToken.None);
+        await logger.WaitForPassToFinishAsync();
+
+        app.Clock.Advance(TimeSpan.FromSeconds(3600));
+        await logger.WaitForPassToFinishAsync();
+
+        Assert.Equal(2, app.Probe.Calls);
+
+        await worker.StopAsync(CancellationToken.None);
+    }
+
     [Fact]
     public async Task TicksDuringASlowCheckNeverStartASecondCheck()
     {
@@ -572,6 +597,27 @@ public class MonitoringWorkerLoopTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(2, app.Probe.Calls);
+    }
+
+    // The test above only stops the first read, which is outside the lock. This test also notices
+    // if the worker goes on to take the lock and read again for a service that is not due.
+    [Fact]
+    public async Task WorkerNeverHoldsTheLockInAPassWhereTheServiceIsNotDue()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        await RegisterAsync(app, client, "Example");
+        using MonitoringWorker worker = app.CreateWorker();
+
+        // The first pass checks the service, and is allowed to hold the lock while it does.
+        await worker.RunPassAsync(CancellationToken.None);
+        app.RepositoryControl.ForgetLockCounts();
+
+        await worker.RunPassAsync(CancellationToken.None);
+
+        Assert.Equal(1, app.Probe.Calls);
+        Assert.Equal(0, app.RepositoryControl.GetHighestLockCountDuringRead());
     }
 
     // The worker reads the service as due and is stopped there. A manual check then runs from start

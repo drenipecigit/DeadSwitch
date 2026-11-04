@@ -95,8 +95,9 @@ internal sealed class TestApp : WebApplicationFactory<Program>
     private TestRepository CreateTestRepository(IServiceProvider provider)
     {
         DeadSwitchDbContext db = provider.GetRequiredService<DeadSwitchDbContext>();
+        ServiceLocks locks = provider.GetRequiredService<ServiceLocks>();
         MonitoredServiceRepository realRepository = new MonitoredServiceRepository(db);
-        return new TestRepository(realRepository, RepositoryControl);
+        return new TestRepository(realRepository, RepositoryControl, locks);
     }
 
     public override async ValueTask DisposeAsync()

@@ -5,6 +5,7 @@ internal sealed class TestRepositoryControl
 {
     private readonly object _sync = new object();
     private bool _holdNextGetById;
+    private int _highestLockCountDuringRead;
 
     // Håller kvar workern mitt i ett pass, så att testet kan göra ett anrop exakt då.
     private readonly SemaphoreSlim _holdReached = new SemaphoreSlim(0);
@@ -12,6 +13,33 @@ internal sealed class TestRepositoryControl
 
     // When true, GetAllAsync throws. Volatile, because the worker reads it on another thread.
     public volatile bool FailGetAll;
+
+    public void RememberLockCount(int lockCount)
+    {
+        lock (_sync)
+        {
+            if (lockCount > _highestLockCountDuringRead)
+            {
+                _highestLockCountDuringRead = lockCount;
+            }
+        }
+    }
+
+    public void ForgetLockCounts()
+    {
+        lock (_sync)
+        {
+            _highestLockCountDuringRead = 0;
+        }
+    }
+
+    public int GetHighestLockCountDuringRead()
+    {
+        lock (_sync)
+        {
+            return _highestLockCountDuringRead;
+        }
+    }
 
     public void HoldNextGetById()
     {
