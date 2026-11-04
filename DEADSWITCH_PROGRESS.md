@@ -47,8 +47,24 @@ The application does not run migrations at startup. Run `dotnet ef database upda
 Date: 2026-11-04.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
-- `dotnet test DeadSwitch.slnx`: 172 passed, 0 failed.
-- Of the 172 tests, 130 only classify URLs and IP addresses, 15 run the real connection code against a local server, 7 test the probe with a stub handler, and 20 use the API, the worker or the migrations with a fake probe and an in-memory database.
+- `dotnet test DeadSwitch.slnx`: 184 passed, 0 failed.
+- Of the 184 tests, 130 only classify URLs and IP addresses, 15 run the real connection code against a local server, 7 test the probe with a stub handler, 7 test `ServiceLocks` directly, and 25 use the API, the worker or the migrations with a fake probe and an in-memory database.
+
+### Mutation check of the service locks
+
+The test with 65 services failed against the old design, with 22 of the 65 checks wrongly rejected. The new locks were then broken on purpose, one change at a time, running only the lock and check tests. The changes were never committed.
+
+| Change | Failing tests |
+|---|---|
+| An entry is never removed | 8 |
+| All services share one lock | 3 |
+| A cancelled waiter stays counted | 1 |
+| `TryEnter` ignores a held lock | 3 |
+| `Release` does not release the gate | 5 |
+| `CheckAsync` does not release in `finally` | 5 |
+| `DeleteAsync` does not take the lock | 1 |
+| `UpdateAsync` does not take the lock | 1 |
+| `EnterAsync` does not count the user | 6 |
 
 ### Mutation check of the SSRF protection
 
@@ -108,6 +124,9 @@ Done by the owner against a newly created database:
 - A manual check saves status and history; history paging works.
 - Deleting a service also deletes its history.
 - Overlapping manual checks return 409, and a cancelled check saves nothing.
+- Every service has its own lock: 65 services can be checked at the same time, and an update does not wait for another service's check.
+- An update or delete waits for a running check of the same service.
+- Locks exist only while in use. Requests with random ids and cancelled waiters leave nothing behind, and 50 callers on one service never overlap.
 - A worker pass (`RunPassAsync`) checks only enabled services that are due, and continues correctly after a restart.
 - The probe maps status codes, network failures and timeouts to the expected result.
 - The latest migration keeps existing rows and pauses them.
@@ -148,8 +167,10 @@ Limitation of the 3xx decision: an answer of 3xx only proves that the server res
 
 ## Known limitations
 
-- `ServiceLocks` shares 64 locks by hash, so two different services can share a lock. That can cause a false 409 or make an update wait for another service's check. With 10 services the chance of at least one collision is about 50 %.
-- Checks run one at a time, so slow services delay all the others.
+- `ServiceLocks` works within one process. Two running instances could check the same service at the same time. This is fine with SQLite and one container, but not for scaling out.
+- An update or delete waits for a running check of the same service, up to its `TimeoutSeconds`.
+- There is no limit on how many callers can wait for one lock, or on how many manual checks can run at once. Both remain open until authentication and rate limiting in phase 6.
+- The worker checks services one at a time, so slow services delay all the others.
 - History is never cleaned up and grows without limit.
 - `SocketsHttpHandler.ConnectTimeout` is 10 seconds, even when `TimeoutSeconds` is higher. One address that never answers can use all of it before the next address is tried.
 - Status values are plain strings; there is no `ServiceStatus` enum.
@@ -192,12 +213,12 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in this order. The MVP covers phases 1 to 4. Each task is one branch, with a plan approved first.
 
-**Next step:** `fix/service-locks`.
+**Next step:** `fix/status-enum`.
 
 ### Phase 1: Stable foundation
 
 1. Done: `test/ssrf-real-handler`: move the handler configuration to Infrastructure and test redirects, private addresses and DNS rebinding against a local test server. Then bring the security code into the plain style, protected by those tests.
-2. `fix/service-locks`: one lock per service, with a test that different services do not block each other.
+2. Done: `fix/service-locks`: one lock per service, with a test that different services do not block each other.
 3. `fix/status-enum`: add `ServiceStatus`. A timeout is DOWN and a blocked address is UNKNOWN.
 4. `fix/redirect-status`: 3xx is UP, without following the redirect. Document the limitation.
 5. `test/worker-loop`: test error isolation, shutdown and worker against manual check. Also investigate a finding from a manual run: with `intervalSeconds` = 10, the real interval was usually 15 seconds, over 16 checks. Unconfirmed hypothesis: the poll interval and the "due" comparison make a service miss a pass by a few milliseconds. Confirm the cause with a test, then fix it.
@@ -245,3 +266,4 @@ The phases are done in this order. The MVP covers phases 1 to 4. Each task is on
 | 3 | A certificate is only visible during the TLS handshake, and a reused connection does no new handshake. "On each check" therefore does not work with pooled connections | Either turn off pooling for the probe, which also rechecks the address on every check, or use the most recently seen certificate. The cost of the first option has not been measured |
 | 4 | Docker tooling licence | Not settled. Nothing is installed until the licence has been confirmed |
 | 5 and 6 | A static page cannot hide an API key | Design the authentication with the dashboard in mind |
+| 6 | Rate limiting is planned for `/check`, but `POST /services/{id}/check` and `GET /services/{id}/check` also start network requests, and the locks do not limit checks of different services | Cover all the check routes in phase 6 |
