@@ -10,7 +10,13 @@ public class HttpHealthProbeTests
     [Theory]
     [InlineData(200, ServiceStatus.Up, null)]
     [InlineData(204, ServiceStatus.Up, null)]
-    [InlineData(302, ServiceStatus.Down, "HTTP 302")]
+    [InlineData(299, ServiceStatus.Up, null)]
+    [InlineData(300, ServiceStatus.Up, null)]
+    [InlineData(301, ServiceStatus.Up, null)]
+    [InlineData(302, ServiceStatus.Up, null)]
+    [InlineData(304, ServiceStatus.Up, null)]
+    [InlineData(399, ServiceStatus.Up, null)]
+    [InlineData(400, ServiceStatus.Down, "HTTP 400")]
     [InlineData(503, ServiceStatus.Down, "HTTP 503")]
     public async Task ProbeRecordsHttpOutcome(int code, ServiceStatus status, string? failure)
     {
@@ -27,6 +33,30 @@ public class HttpHealthProbeTests
         Assert.Equal(code, result.StatusCode);
         Assert.Equal(failure, result.FailureReason);
         Assert.True(result.ResponseTimeMs >= 0);
+    }
+
+    // The stub always answers with a redirect, so a probe that followed it would call the stub again.
+    // The address is loopback on purpose: this test must never point at a real target.
+    [Fact]
+    public async Task RedirectIsRecordedAsUpWithoutSendingASecondRequest()
+    {
+        int requests = 0;
+        StubHandler handler = new StubHandler((request, cancellationToken) =>
+        {
+            requests++;
+            HttpResponseMessage response = new HttpResponseMessage(HttpStatusCode.Redirect);
+            response.Headers.Location = new Uri("http://127.0.0.1/secret");
+            return Task.FromResult(response);
+        });
+        using HttpClient client = new HttpClient(handler);
+        HttpHealthProbe probe = new HttpHealthProbe(client);
+
+        ProbeResult result = await probe.CheckAsync("https://example.com", 1, CancellationToken.None);
+
+        Assert.Equal(ServiceStatus.Up, result.Status);
+        Assert.Equal(302, result.StatusCode);
+        Assert.Null(result.FailureReason);
+        Assert.Equal(1, requests);
     }
 
     [Fact]
