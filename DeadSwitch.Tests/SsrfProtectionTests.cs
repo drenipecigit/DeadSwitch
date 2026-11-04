@@ -13,22 +13,41 @@ namespace DeadSwitch.Tests;
 //   and the real address rule. They prove the protection is actually connected in the application.
 // - The other tests control DNS and the address rule, because the server lives on 127.0.0.1 and the
 //   real rule would stop everything. They prove how the connection code behaves.
+//
+// The URLs use 127.0.0.1 instead of a hostname on purpose. The connector asks the fake DNS whatever
+// the URL says, and if the connector is ever removed the handler connects straight to this machine
+// without any name lookup. The few tests that need a name carry the trait below, so they can be left
+// out of a run with the protection removed: dotnet test --filter "Category!=NameLookupWithoutConnector"
 public class SsrfProtectionTests
 {
+    private const string NameLookupWithoutConnector = "NameLookupWithoutConnector";
+
     private static readonly IPAddress AllowedAddress = IPAddress.Parse("127.0.0.1");
     private static readonly IPAddress ForbiddenAddress = IPAddress.Parse("127.0.0.2");
 
-    [Theory]
-    [InlineData("127.0.0.1")]
-    [InlineData("localhost")]
-    public async Task RegisteredHandlerBlocksLocalServer(string host)
+    [Fact]
+    public async Task RegisteredHandlerBlocksLoopbackAddress()
     {
         await using LocalTestServer server = await LocalTestServer.StartAsync();
         await using TestApp app = new TestApp();
         using HttpClient client = new HttpClient(CreateRegisteredHandler(app), disposeHandler: false);
 
         await Assert.ThrowsAsync<HttpRequestException>(() =>
-            client.GetAsync($"http://{host}:{server.Port}/ok"));
+            client.GetAsync($"http://127.0.0.1:{server.Port}/ok"));
+
+        Assert.Equal(0, server.RequestCount);
+    }
+
+    [Fact]
+    [Trait("Category", NameLookupWithoutConnector)]
+    public async Task RegisteredHandlerBlocksLocalhostName()
+    {
+        await using LocalTestServer server = await LocalTestServer.StartAsync();
+        await using TestApp app = new TestApp();
+        using HttpClient client = new HttpClient(CreateRegisteredHandler(app), disposeHandler: false);
+
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            client.GetAsync($"http://localhost:{server.Port}/ok"));
 
         Assert.Equal(0, server.RequestCount);
     }
@@ -56,15 +75,29 @@ public class SsrfProtectionTests
     // The control for all the blocking tests: it shows the server can be reached when the rule
     // allows it, so "0 requests" in the other tests really means blocked and not "server unreachable".
     [Fact]
-    public async Task AllowedAddressReachesServerAndKeepsHostName()
+    public async Task AllowedAddressReachesServer()
     {
         await using LocalTestServer server = await LocalTestServer.StartAsync();
         FakeDns dns = new FakeDns(new[] { AllowedAddress });
         using HttpClient client = CreateClient(dns, IsAllowedAddress);
 
-        HttpResponseMessage response = await client.GetAsync($"http://monitored.test:{server.Port}/ok");
+        HttpResponseMessage response = await client.GetAsync($"http://127.0.0.1:{server.Port}/ok");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(1, server.RequestCount);
+    }
+
+    // The connection goes to an IP address, but the server must still see the name from the URL.
+    [Fact]
+    [Trait("Category", NameLookupWithoutConnector)]
+    public async Task HostNameIsKeptInRequest()
+    {
+        await using LocalTestServer server = await LocalTestServer.StartAsync();
+        FakeDns dns = new FakeDns(new[] { AllowedAddress });
+        using HttpClient client = CreateClient(dns, IsAllowedAddress);
+
+        await client.GetAsync($"http://monitored.test:{server.Port}/ok");
+
         Assert.Equal($"monitored.test:{server.Port}", server.Requests[0].Host);
     }
 
@@ -75,7 +108,7 @@ public class SsrfProtectionTests
         FakeDns dns = new FakeDns(new[] { AllowedAddress });
         using HttpClient client = CreateClient(dns, IsAllowedAddress);
 
-        HttpResponseMessage response = await client.GetAsync($"http://monitored.test:{server.Port}/redirect");
+        HttpResponseMessage response = await client.GetAsync($"http://127.0.0.1:{server.Port}/redirect");
 
         Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
         Assert.Equal(1, server.CountRequestsTo("/redirect"));
@@ -89,22 +122,22 @@ public class SsrfProtectionTests
         FakeDns dns = new FakeDns(new[] { AllowedAddress });
         using HttpClient client = CreateClient(dns, IsAllowedAddress);
 
-        await client.GetAsync($"http://monitored.test:{server.Port}/set-cookie");
-        await client.GetAsync($"http://monitored.test:{server.Port}/ok");
+        await client.GetAsync($"http://127.0.0.1:{server.Port}/set-cookie");
+        await client.GetAsync($"http://127.0.0.1:{server.Port}/ok");
 
         Assert.Equal(2, server.RequestCount);
         Assert.Null(server.Requests[1].Cookie);
     }
 
     [Fact]
-    public async Task HostNamePointingToPrivateAddressIsBlockedByRealRule()
+    public async Task PrivateDnsAnswerIsBlockedByRealRule()
     {
         await using LocalTestServer server = await LocalTestServer.StartAsync();
         FakeDns dns = new FakeDns(new[] { AllowedAddress });
         using HttpClient client = CreateClient(dns, UrlSafety.IsPublicAddress);
 
         await Assert.ThrowsAsync<HttpRequestException>(() =>
-            client.GetAsync($"http://looks-public.test:{server.Port}/ok"));
+            client.GetAsync($"http://127.0.0.1:{server.Port}/ok"));
 
         Assert.Equal(1, dns.Calls);
         Assert.Equal(0, server.RequestCount);
@@ -120,7 +153,7 @@ public class SsrfProtectionTests
         using HttpClient client = CreateClient(dns, IsAllowedAddress);
 
         await Assert.ThrowsAsync<HttpRequestException>(() =>
-            client.GetAsync($"http://mixed.test:{server.Port}/ok"));
+            client.GetAsync($"http://127.0.0.1:{server.Port}/ok"));
 
         // Without this line the test would also pass if the connector was never used.
         Assert.Equal(1, dns.Calls);
@@ -135,7 +168,7 @@ public class SsrfProtectionTests
         using HttpClient client = CreateClient(dns, IsAllowedAddress);
 
         await Assert.ThrowsAsync<HttpRequestException>(() =>
-            client.GetAsync($"http://empty.test:{server.Port}/ok"));
+            client.GetAsync($"http://127.0.0.1:{server.Port}/ok"));
 
         // Without this line the test would also pass if the connector was never used.
         Assert.Equal(1, dns.Calls);
@@ -152,7 +185,7 @@ public class SsrfProtectionTests
         using HttpClient client = CreateClient(dns, IsAllowedAddress);
         // Without this the second request would reuse the first connection and skip the check.
         client.DefaultRequestHeaders.ConnectionClose = true;
-        string url = $"http://rebinding.test:{server.Port}/ok";
+        string url = $"http://127.0.0.1:{server.Port}/ok";
 
         HttpResponseMessage first = await client.GetAsync(url);
         await Assert.ThrowsAsync<HttpRequestException>(() => client.GetAsync(url));
@@ -171,7 +204,7 @@ public class SsrfProtectionTests
         FakeDns dns = new FakeDns(new[] { AllowedAddress }, new[] { ForbiddenAddress });
         using HttpClient client = CreateClient(dns, IsAllowedAddress);
 
-        HttpResponseMessage response = await client.GetAsync($"http://rebinding.test:{server.Port}/ok");
+        HttpResponseMessage response = await client.GetAsync($"http://127.0.0.1:{server.Port}/ok");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(1, dns.Calls);
@@ -186,7 +219,7 @@ public class SsrfProtectionTests
         FakeDns dns = new FakeDns(new[] { ForbiddenAddress, AllowedAddress });
         using HttpClient client = CreateClient(dns, address => true);
 
-        HttpResponseMessage response = await client.GetAsync($"http://two-addresses.test:{server.Port}/ok");
+        HttpResponseMessage response = await client.GetAsync($"http://127.0.0.1:{server.Port}/ok");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(1, server.RequestCount);
@@ -214,7 +247,9 @@ public class SsrfProtectionTests
         Assert.Equal(new[] { IPAddress.IPv6Loopback }, judged);
     }
 
+    // Needs a name, because the probe's own URL validation rejects an IP address on this machine.
     [Fact]
+    [Trait("Category", NameLookupWithoutConnector)]
     public async Task ProbeRevealsNoAddressWhenConnectionIsBlocked()
     {
         FakeDns dns = new FakeDns(new[] { AllowedAddress });
