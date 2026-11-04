@@ -103,6 +103,22 @@ public class MonitoredServiceService
     // Returns null both when the service does not exist and when onlyIfDue skips it.
     public async Task<CheckRecord?> CheckAsync(Guid id, bool onlyIfDue = false, CancellationToken ct = default)
     {
+        if (onlyIfDue)
+        {
+            // Checked before the lock, so a pass that has nothing to do never holds the lock.
+            // Otherwise a manual check arriving at that moment would wrongly get 409.
+            MonitoredService? serviceBeforeLock = await _repository.GetByIdAsync(id, ct);
+            if (serviceBeforeLock == null)
+            {
+                return null;
+            }
+
+            if (!IsDue(serviceBeforeLock))
+            {
+                return null;
+            }
+        }
+
         // A concurrent check is rejected instead of queuing another network request.
         bool gotLock = _locks.TryEnter(id);
         if (!gotLock)
@@ -112,6 +128,7 @@ public class MonitoredServiceService
 
         try
         {
+            // Read again inside the lock: a manual check can have finished after the first read.
             MonitoredService? service = await _repository.GetByIdAsync(id, ct);
             if (service is null)
             {

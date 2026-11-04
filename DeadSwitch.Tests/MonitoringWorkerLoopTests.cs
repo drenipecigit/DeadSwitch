@@ -546,6 +546,58 @@ public class MonitoringWorkerLoopTests
         Assert.Equal(3, app.Probe.Calls);
     }
 
+    // The worker is stopped in the middle of its read. If it took the lock before that read, the
+    // manual check would get 409 although the worker has nothing to do for this service.
+    [Fact]
+    public async Task ManualCheckGetsNo409DuringAPassWhereTheServiceIsNotDue()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService service = await RegisterAsync(app, client, "Example");
+        using MonitoringWorker worker = app.CreateWorker();
+
+        // The first pass checks the service, so it is not due in the next pass.
+        await worker.RunPassAsync(CancellationToken.None);
+        Assert.Equal(1, app.Probe.Calls);
+
+        app.RepositoryControl.HoldNextGetById();
+        Task pass = worker.RunPassAsync(CancellationToken.None);
+        await app.RepositoryControl.WaitUntilHoldIsReachedAsync();
+
+        HttpResponseMessage response = await client.PostAsync($"/services/{service.Id}/check", null);
+
+        app.RepositoryControl.ReleaseHold();
+        await pass;
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(2, app.Probe.Calls);
+    }
+
+    // The worker reads the service as due and is stopped there. A manual check then runs from start
+    // to end. When the worker continues, it must read again and see that the service is no longer due.
+    [Fact]
+    public async Task WorkerDoesNotCheckAgainWhenAManualCheckFinishedAfterItsFirstRead()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService service = await RegisterAsync(app, client, "Example");
+        using MonitoringWorker worker = app.CreateWorker();
+
+        app.RepositoryControl.HoldNextGetById();
+        Task pass = worker.RunPassAsync(CancellationToken.None);
+        await app.RepositoryControl.WaitUntilHoldIsReachedAsync();
+
+        HttpResponseMessage response = await client.PostAsync($"/services/{service.Id}/check", null);
+
+        app.RepositoryControl.ReleaseHold();
+        await pass;
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(1, app.Probe.Calls);
+    }
+
     // Runs the real loop for a number of ticks and returns the time every check started.
     private static async Task<List<DateTimeOffset>> RunLoopAndGetCheckTimesAsync(
         MonitoringOptions options,
