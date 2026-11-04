@@ -10,9 +10,9 @@ DeadSwitch is a personal uptime monitor. The backend is **not finished**: see th
 
 | Project | Contains | References |
 |---|---|---|
-| `DeadSwitch.Domain` | `MonitoredService`, `CheckRecord` | nothing |
+| `DeadSwitch.Domain` | `MonitoredService`, `CheckRecord`, `ServiceStatus` | nothing |
 | `DeadSwitch.Application` | `MonitoredServiceService`, `ServiceConfiguration`, `UrlSafety`, `ServiceLocks`, interfaces | Domain |
-| `DeadSwitch.Infrastructure` | `DeadSwitchDbContext`, repository, `HttpHealthProbe`, `ProtectedHttpHandler`, `PublicInternetConnector`, migrations | Application, Domain |
+| `DeadSwitch.Infrastructure` | `DeadSwitchDbContext`, repository, `HttpHealthProbe`, `ProtectedHttpHandler`, `PublicInternetConnector`, `DestinationBlockedException`, migrations | Application, Domain |
 | `DeadSwitch.Api` | Startup in `Program.cs`, `ServiceEndpoints`, `MonitoringWorker` | Application, Domain, Infrastructure |
 | `DeadSwitch.Tests` | Automated tests | Api, and the other projects through it |
 
@@ -39,16 +39,41 @@ DeadSwitch is a personal uptime monitor. The backend is **not finished**: see th
 | `AddCurrentStatusToMonitoredService` | Adds `CurrentStatus` |
 | `AddLastCheckedAtToMonitoredService` | Adds `LastCheckedAt` |
 | `AddMonitoringHistoryAndScheduling` | Adds `IntervalSeconds`, `TimeoutSeconds` and `IsEnabled`, and creates `CheckRecords` with cascade delete. Existing rows stay paused because `IsEnabled` defaults to false |
+| `MakeCurrentStatusRequired` | Makes `CurrentStatus` NOT NULL with the default `UNKNOWN`. Rows with NULL become `UNKNOWN`, other values and all check records are kept. SQLite rebuilds the table for this, with foreign keys turned off around the drop so that the cascade does not delete the history |
 
-The application does not run migrations at startup. Run `dotnet ef database update` when setting up a database. The local development database has been recreated from all migrations.
+The application does not run migrations at startup. Run `dotnet ef database update` when setting up a database. `MakeCurrentStatusRequired` has run in the tests and from empty against a separate database file, but not against the local development database. Run the command there as well.
+
+Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, so old rows did not need rewriting.
 
 ## Latest verified result
 
 Date: 2026-11-04.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
-- `dotnet test DeadSwitch.slnx`: 184 passed, 0 failed.
-- Of the 184 tests, 130 only classify URLs and IP addresses, 15 run the real connection code against a local server, 7 test the probe with a stub handler, 7 test `ServiceLocks` directly, and 25 use the API, the worker or the migrations with a fake probe and an in-memory database.
+- `dotnet test DeadSwitch.slnx`: 196 passed, 0 failed.
+- Of the 196 tests, 130 only classify URLs and IP addresses, 17 run the real connection code against a local server, 9 test the probe with a stub handler, 7 test `ServiceLocks` directly, and 33 use the API, the worker or the migrations with a fake probe and an in-memory database.
+
+### Mutation check of the status enum
+
+The code was broken on purpose, one change at a time, running all tests. The changes were never committed. None of them removed the SSRF protection.
+
+| Change | Failing tests |
+|---|---|
+| The connector throws a plain `HttpRequestException` | 1 |
+| The probe does not search `InnerException` | 1 |
+| A blocked address gives DOWN | 1 |
+| A rejected URL gives DOWN | 2 |
+| The JSON converter is removed | 6 |
+| The JSON converter has no naming policy | 6 |
+| The database conversion is removed | 31 |
+| The database text is not uppercase | 31 |
+| The migration has no default | 1 |
+| The table is rebuilt with foreign keys left on | 1 |
+| An update keeps the old status when the URL changes | 1 |
+
+The two database rows fail so many tests because the model no longer matches the migrations, and EF Core then refuses to migrate. They therefore do not show which single test would have noticed the change.
+
+The rebuild row shows that the migration test notices lost history: without EF Core's handling of foreign keys, the cascade deletes the check records and the test fails.
 
 ### Mutation check of the service locks
 
@@ -129,7 +154,11 @@ Done by the owner against a newly created database:
 - Locks exist only while in use. Requests with random ids and cancelled waiters leave nothing behind, and 50 callers on one service never overlap.
 - A worker pass (`RunPassAsync`) checks only enabled services that are due, and continues correctly after a restart.
 - The probe maps status codes, network failures and timeouts to the expected result.
-- The latest migration keeps existing rows and pauses them.
+- An address blocked at connection time and a rejected URL give UNKNOWN, through the real connector and `SocketsHttpHandler` for the blocked address. An empty DNS answer gives DOWN.
+- Status is `UP`, `DOWN` or `UNKNOWN` as text in the JSON of every check route, the service and the history, and as text in the database.
+- `AddMonitoringHistoryAndScheduling` keeps existing rows and pauses them.
+- `MakeCurrentStatusRequired` turns NULL into `UNKNOWN`, and keeps other statuses and the check history.
+- The model matches the migrations.
 - URL validation, and address classification at the first and last address of every blocked range.
 - The handler the application registers blocks `127.0.0.1` and `localhost`, and the local server receives no request.
 - Redirects are returned and not followed, and cookies are not sent back.
@@ -148,19 +177,20 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | Manual check and history | Done | |
 | Background worker | Partial | The `ExecuteAsync` loop, error isolation between services and shutdown are untested |
 | No overlapping checks | Partial | Protects a single process only; see the lock limitation below |
-| Status UP / DOWN / UNKNOWN | Partial | Decided rules are not built yet; see below |
+| Status UP / DOWN / UNKNOWN | Partial | 3xx is still DOWN; see below |
 | History endpoint | **Bug, confirmed** | `POST /services/{id}/check` returns `checkedAtUtc` with `Z`, but `GET /services/{id}/history` returns the same time without `Z`. A client can read it as local time. Not fixed yet |
 | SSRF protection | Done for HTTP | Proven by tests against a local server. HTTPS through the connector is untested; see the security notes |
 | Tests for all of the above | Partial | See the gaps above |
 | README | Missing | |
 | GitHub Actions | Missing | Waits for the owner's approval |
 
-## Decided but not built
+## Status rules
 
 | Case | Decided | Current behaviour |
 |---|---|---|
-| Timeout | DOWN | DOWN, already correct |
-| Blocked address | UNKNOWN | **Still DOWN** until `fix/status-enum` |
+| Timeout | DOWN | DOWN, proven by a test |
+| Connection, DNS or TLS failure, including an empty DNS answer | DOWN | DOWN, proven by tests |
+| Blocked address or rejected URL | UNKNOWN, because no request was sent and nothing was learned about the service | UNKNOWN, proven by tests |
 | 3xx response | UP, without following the redirect | **Still DOWN** until `fix/redirect-status` |
 
 Limitation of the 3xx decision: an answer of 3xx only proves that the server responded. The redirect target is never checked, so a redirect to a broken page still counts as UP. This must be documented in the README when it is built.
@@ -173,7 +203,7 @@ Limitation of the 3xx decision: an answer of 3xx only proves that the server res
 - The worker checks services one at a time, so slow services delay all the others.
 - History is never cleaned up and grows without limit.
 - `SocketsHttpHandler.ConnectTimeout` is 10 seconds, even when `TimeoutSeconds` is higher. One address that never answers can use all of it before the next address is tried.
-- Status values are plain strings; there is no `ServiceStatus` enum.
+- A value in a status column other than `UP`, `DOWN` or `UNKNOWN` makes reading that row fail. The application only writes these three, so this needs a manual edit of the database.
 
 ## Code style exceptions
 
@@ -213,13 +243,13 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in this order. The MVP covers phases 1 to 4. Each task is one branch, with a plan approved first.
 
-**Next step:** `fix/status-enum`.
+**Next step:** `fix/redirect-status`.
 
 ### Phase 1: Stable foundation
 
 1. Done: `test/ssrf-real-handler`: move the handler configuration to Infrastructure and test redirects, private addresses and DNS rebinding against a local test server. Then bring the security code into the plain style, protected by those tests.
 2. Done: `fix/service-locks`: one lock per service, with a test that different services do not block each other.
-3. `fix/status-enum`: add `ServiceStatus`. A timeout is DOWN and a blocked address is UNKNOWN.
+3. Done: `fix/status-enum`: add `ServiceStatus`. A timeout is DOWN and a blocked address is UNKNOWN.
 4. `fix/redirect-status`: 3xx is UP, without following the redirect. Document the limitation.
 5. `test/worker-loop`: test error isolation, shutdown and worker against manual check. Also investigate a finding from a manual run: with `intervalSeconds` = 10, the real interval was usually 15 seconds, over 16 checks. Unconfirmed hypothesis: the poll interval and the "due" comparison make a service miss a pass by a few milliseconds. Confirm the cause with a test, then fix it.
 6. `fix/api-contract`: dedicated validation exception, 400 on malformed JSON, safe `PUT` defaults, and UTC timestamps with `Z` (the confirmed bug above).
@@ -262,6 +292,7 @@ The phases are done in this order. The MVP covers phases 1 to 4. Each task is on
 
 | Phase | Question | Current thinking |
 |---|---|---|
+| 2 | Notifications are planned for UP to DOWN and DOWN to UP. A service going from UP to UNKNOWN can mean that its name now points to a private address, which is worth knowing | Not decided. Decide in phase 2 |
 | 3 | 3xx counts as UP and is not followed, so `http://example.com` answering 301 gives only the redirect's headers and no certificate. That would produce a misleading grade and false alarms | Grade only a real HTTPS response; anything else is "cannot be assessed". Decide in phase 3 |
 | 3 | A certificate is only visible during the TLS handshake, and a reused connection does no new handshake. "On each check" therefore does not work with pooled connections | Either turn off pooling for the probe, which also rechecks the address on every check, or use the most recently seen certificate. The cost of the first option has not been measured |
 | 4 | Docker tooling licence | Not settled. Nothing is installed until the licence has been confirmed |
