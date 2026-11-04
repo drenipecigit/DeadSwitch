@@ -158,7 +158,7 @@ public static class ServiceEndpoints
     {
         context.Response.Headers.CacheControl = "no-store";
 
-        // Validated here, because the probe turns a rejected URL into DOWN and this route must return 400.
+        // Validated here, because the probe turns a rejected URL into UNKNOWN and this route must return 400.
         UrlSafety.Validate(url);
 
         ProbeResult result = await probe.CheckAsync(url, 10, ct);

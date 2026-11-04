@@ -1,6 +1,7 @@
 using System.Net;
 using DeadSwitch.Application.Interfaces;
 using DeadSwitch.Application.Services;
+using DeadSwitch.Domain;
 using DeadSwitch.Infrastructure.Monitoring;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -263,6 +264,39 @@ public class SsrfProtectionTests
         Assert.Null(result.StatusCode);
         Assert.NotNull(result.FailureReason);
         Assert.DoesNotContain("127.0.0.1", result.FailureReason);
+    }
+
+    // Goes through the real connector and SocketsHttpHandler, because the probe depends on how
+    // HttpClient wraps the connector's exception. A stub handler could not prove that.
+    [Fact]
+    [Trait("Category", NameLookupWithoutConnector)]
+    public async Task ProbeRecordsBlockedAddressAsUnknown()
+    {
+        FakeDns dns = new FakeDns(new[] { AllowedAddress });
+        using HttpClient client = CreateClient(dns, UrlSafety.IsPublicAddress);
+        HttpHealthProbe probe = new HttpHealthProbe(client);
+
+        ProbeResult result = await probe.CheckAsync("http://looks-public.test/", 5, CancellationToken.None);
+
+        Assert.Equal(1, dns.Calls);
+        Assert.Equal(ServiceStatus.Unknown, result.Status);
+        Assert.Equal("Destination address blocked by policy.", result.FailureReason);
+    }
+
+    // No forbidden address was seen, so this counts as a host that cannot be found, which is DOWN.
+    [Fact]
+    [Trait("Category", NameLookupWithoutConnector)]
+    public async Task ProbeRecordsEmptyDnsAnswerAsDown()
+    {
+        FakeDns dns = new FakeDns(Array.Empty<IPAddress>());
+        using HttpClient client = CreateClient(dns, IsAllowedAddress);
+        HttpHealthProbe probe = new HttpHealthProbe(client);
+
+        ProbeResult result = await probe.CheckAsync("http://looks-public.test/", 5, CancellationToken.None);
+
+        Assert.Equal(1, dns.Calls);
+        Assert.Equal(ServiceStatus.Down, result.Status);
+        Assert.Equal("Connection, DNS or TLS failure.", result.FailureReason);
     }
 
     private static HttpMessageHandler CreateRegisteredHandler(TestApp app)

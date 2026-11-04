@@ -5,7 +5,7 @@ public class MonitoredService
     public Guid Id { get; set; }
     public string Name { get; set; } = string.Empty;
     public string Url { get; set; } = string.Empty;
-    public string? CurrentStatus { get; set; } = "UNKNOWN";
+    public ServiceStatus CurrentStatus { get; set; } = ServiceStatus.Unknown;
 
     // DateTimeOffset keeps the UTC offset, so the time means the same thing on every machine.
     public DateTimeOffset? LastCheckedAt { get; set; }

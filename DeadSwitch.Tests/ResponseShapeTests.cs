@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using DeadSwitch.Application.Interfaces;
 using DeadSwitch.Application.Services;
 using DeadSwitch.Domain;
 
@@ -64,6 +65,52 @@ public class ResponseShapeTests
         Assert.Equal(service.Id, body.GetProperty("id").GetGuid());
         Assert.Equal("Example", body.GetProperty("name").GetString());
         Assert.Equal("UP", body.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task NewServiceReturnsStatusAsUnknownText()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/services", new ServiceConfiguration("Example", "https://example.com"));
+
+        response.EnsureSuccessStatusCode();
+        JsonElement body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("UNKNOWN", body.GetProperty("currentStatus").GetString());
+    }
+
+    // Reads the service and the history back afterwards, so the value has also been through the database.
+    [Theory]
+    [InlineData(ServiceStatus.Up, "UP")]
+    [InlineData(ServiceStatus.Down, "DOWN")]
+    [InlineData(ServiceStatus.Unknown, "UNKNOWN")]
+    public async Task EveryCheckRouteReturnsStatusAsText(ServiceStatus status, string expectedText)
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService service = await app.RegisterServiceAsync(client, new ServiceConfiguration("Example", "https://example.com"));
+        app.Probe.Result = new ProbeResult(status, null, 12, null);
+
+        HttpResponseMessage check = await client.PostAsync($"/services/{service.Id}/check", null);
+
+        check.EnsureSuccessStatusCode();
+        JsonElement checkBody = await check.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(expectedText, checkBody.GetProperty("status").GetString());
+
+        JsonElement serviceBody = await client.GetFromJsonAsync<JsonElement>($"/services/{service.Id}");
+        Assert.Equal(expectedText, serviceBody.GetProperty("currentStatus").GetString());
+
+        JsonElement history = await client.GetFromJsonAsync<JsonElement>($"/services/{service.Id}/history");
+        Assert.Equal(expectedText, history[0].GetProperty("status").GetString());
+
+        JsonElement compatibilityBody = await client.GetFromJsonAsync<JsonElement>($"/services/{service.Id}/check");
+        Assert.Equal(expectedText, compatibilityBody.GetProperty("status").GetString());
+
+        JsonElement adHocBody = await client.GetFromJsonAsync<JsonElement>("/check?url=https://example.com");
+        Assert.Equal(expectedText, adHocBody.GetProperty("status").GetString());
     }
 
     private static List<string> GetFieldNames(JsonElement body)

@@ -63,7 +63,7 @@ public class MonitoredServiceService
             // The old status described the old address, so it says nothing about the new one.
             if (service.Url != configuration.Url.Trim())
             {
-                service.CurrentStatus = "UNKNOWN";
+                service.CurrentStatus = ServiceStatus.Unknown;
                 service.LastCheckedAt = null;
             }
 

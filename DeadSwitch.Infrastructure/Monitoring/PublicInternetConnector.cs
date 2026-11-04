@@ -28,7 +28,8 @@ internal sealed class PublicInternetConnector
 
         // The throw at the end of this method would also stop an empty answer today. This check is
         // kept on purpose as defence in depth: it states the intent, and the protection must not
-        // depend on how the code further down happens to be written.
+        // depend on how the code further down happens to be written. It is a plain failure and not a
+        // blocked destination, because no forbidden address was seen: the name simply has no address.
         if (addresses.Length == 0)
         {
             throw new HttpRequestException("Destination rejected.");
@@ -41,7 +42,7 @@ internal sealed class PublicInternetConnector
         {
             if (!_isAllowedAddress(candidate))
             {
-                throw new HttpRequestException("Destination rejected.");
+                throw new DestinationBlockedException();
             }
         }
 

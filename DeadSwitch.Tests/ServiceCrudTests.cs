@@ -21,11 +21,11 @@ public class ServiceCrudTests
         HttpResponseMessage response = await client.PostAsJsonAsync("/services", configuration);
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        MonitoredService created = (await response.Content.ReadFromJsonAsync<MonitoredService>())!;
+        MonitoredService created = (await response.Content.ReadFromJsonAsync<MonitoredService>(TestJson.Options))!;
         Assert.Equal($"/services/{created.Id}", response.Headers.Location!.OriginalString);
-        Assert.Equal("UNKNOWN", created.CurrentStatus);
+        Assert.Equal(ServiceStatus.Unknown, created.CurrentStatus);
         Assert.False(created.IsEnabled);
-        List<MonitoredService> services = (await client.GetFromJsonAsync<List<MonitoredService>>("/services"))!;
+        List<MonitoredService> services = (await client.GetFromJsonAsync<List<MonitoredService>>("/services", TestJson.Options))!;
         Assert.Single(services);
     }
 
@@ -44,10 +44,14 @@ public class ServiceCrudTests
         HttpResponseMessage response = await client.PutAsJsonAsync($"/services/{created.Id}", changed);
 
         response.EnsureSuccessStatusCode();
-        MonitoredService updated = (await response.Content.ReadFromJsonAsync<MonitoredService>())!;
-        Assert.Equal("UNKNOWN", updated.CurrentStatus);
+        MonitoredService updated = (await response.Content.ReadFromJsonAsync<MonitoredService>(TestJson.Options))!;
+        Assert.Equal(ServiceStatus.Unknown, updated.CurrentStatus);
         Assert.Null(updated.LastCheckedAt);
         Assert.Equal(120, updated.IntervalSeconds);
+
+        // Read again, because the response above only shows the object in memory and not the saved row.
+        MonitoredService persisted = (await client.GetFromJsonAsync<MonitoredService>($"/services/{created.Id}", TestJson.Options))!;
+        Assert.Equal(ServiceStatus.Unknown, persisted.CurrentStatus);
     }
 
     [Fact]
@@ -89,7 +93,7 @@ public class ServiceCrudTests
         HttpResponseMessage response = await client.PostAsJsonAsync("/services", configuration);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        List<MonitoredService> services = (await client.GetFromJsonAsync<List<MonitoredService>>("/services"))!;
+        List<MonitoredService> services = (await client.GetFromJsonAsync<List<MonitoredService>>("/services", TestJson.Options))!;
         Assert.Empty(services);
     }
 

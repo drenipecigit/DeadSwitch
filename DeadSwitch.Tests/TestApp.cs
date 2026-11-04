@@ -66,7 +66,7 @@ internal sealed class TestApp : WebApplicationFactory<Program>
         response.EnsureSuccessStatusCode();
 
         // The ! is safe here: the API returned success, so the body contains a service.
-        MonitoredService service = (await response.Content.ReadFromJsonAsync<MonitoredService>())!;
+        MonitoredService service = (await response.Content.ReadFromJsonAsync<MonitoredService>(TestJson.Options))!;
         return service;
     }
 

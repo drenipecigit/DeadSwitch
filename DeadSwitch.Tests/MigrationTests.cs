@@ -30,9 +30,54 @@ public class MigrationTests
 
         MonitoredService service = await db.MonitoredServices.SingleAsync();
         Assert.Equal(id, service.Id);
-        Assert.Equal("UP", service.CurrentStatus);
+        Assert.Equal(ServiceStatus.Up, service.CurrentStatus);
         Assert.False(service.IsEnabled);
         Assert.Equal(60, service.IntervalSeconds);
         Assert.Equal(10, service.TimeoutSeconds);
+    }
+
+    // SQLite rebuilds the whole table for this migration. Dropping the old table with foreign keys
+    // turned on would delete every check record through the cascade, so that is tested here.
+    [Fact]
+    public async Task RequiredStatusMigrationFillsMissingStatusAndKeepsHistory()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await using AsyncServiceScope scope = app.Services.CreateAsyncScope();
+        DeadSwitchDbContext db = scope.ServiceProvider.GetRequiredService<DeadSwitchDbContext>();
+        IMigrator migrator = db.GetService<IMigrator>();
+
+        await migrator.MigrateAsync("20261103133338_AddMonitoringHistoryAndScheduling");
+        Guid missingStatusId = Guid.NewGuid();
+        Guid upId = Guid.NewGuid();
+        Guid recordId = Guid.NewGuid();
+        string url = "https://example.com";
+        string status = "UP";
+        string checkedAt = "2026-01-01 12:00:00";
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO MonitoredServices (Id, Name, Url, CurrentStatus) VALUES ({missingStatusId}, {"Missing"}, {url}, NULL)");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO MonitoredServices (Id, Name, Url, CurrentStatus) VALUES ({upId}, {"Up"}, {url}, {status})");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO CheckRecords (Id, MonitoredServiceId, Url, CheckedAtUtc, Status, ResponseTimeMs) VALUES ({recordId}, {upId}, {url}, {checkedAt}, {status}, {12})");
+
+        await db.Database.MigrateAsync();
+
+        MonitoredService missingStatus = await db.MonitoredServices.SingleAsync(service => service.Id == missingStatusId);
+        MonitoredService up = await db.MonitoredServices.SingleAsync(service => service.Id == upId);
+        CheckRecord record = await db.CheckRecords.SingleAsync();
+        Assert.Equal(ServiceStatus.Unknown, missingStatus.CurrentStatus);
+        Assert.Equal(ServiceStatus.Up, up.CurrentStatus);
+        Assert.Equal(recordId, record.Id);
+        Assert.Equal(ServiceStatus.Up, record.Status);
+    }
+
+    // Fails if the model was changed without a matching migration.
+    [Fact]
+    public async Task ModelMatchesTheMigrations()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await using AsyncServiceScope scope = app.Services.CreateAsyncScope();
+        DeadSwitchDbContext db = scope.ServiceProvider.GetRequiredService<DeadSwitchDbContext>();
+
+        Assert.False(db.Database.HasPendingModelChanges());
     }
 }

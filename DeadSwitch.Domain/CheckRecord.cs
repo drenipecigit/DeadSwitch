@@ -10,7 +10,7 @@ public class CheckRecord
     public string Url { get; set; } = string.Empty;
 
     public DateTime CheckedAtUtc { get; set; }
-    public string Status { get; set; } = "DOWN";
+    public ServiceStatus Status { get; set; }
 
     // Nullable, because a timeout or a connection failure never produces a status code.
     public int? StatusCode { get; set; }

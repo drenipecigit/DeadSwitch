@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using DeadSwitch.Api.Endpoints;
 using DeadSwitch.Api.Monitoring;
 using DeadSwitch.Application.Interfaces;
@@ -13,6 +15,12 @@ builder.Services.AddOpenApi();
 
 // Makes error responses use the standard Problem Details JSON format.
 builder.Services.AddProblemDetails();
+
+// Clients read status as "UP", "DOWN" and "UNKNOWN". Without this, an enum becomes a number in JSON.
+builder.Services.ConfigureHttpJsonOptions(options =>
+{
+    options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseUpper));
+});
 
 // TimeProvider instead of DateTime.UtcNow, so the tests can replace the clock with a fake.
 builder.Services.AddSingleton(TimeProvider.System);

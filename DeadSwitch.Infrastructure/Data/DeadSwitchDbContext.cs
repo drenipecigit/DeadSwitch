@@ -24,6 +24,21 @@ public class DeadSwitchDbContext(DbContextOptions<DeadSwitchDbContext> options) 
             .Property(service => service.IsEnabled)
             .HasDefaultValue(false);
 
+        // Stored as "UP", "DOWN" and "UNKNOWN", the same text the columns have always held, so the
+        // existing rows stay valid. The default turns old NULL rows into UNKNOWN in the migration.
+        modelBuilder.Entity<MonitoredService>()
+            .Property(service => service.CurrentStatus)
+            .HasConversion(
+                status => status.ToString().ToUpperInvariant(),
+                text => Enum.Parse<ServiceStatus>(text, ignoreCase: true))
+            .HasDefaultValue(ServiceStatus.Unknown);
+
+        modelBuilder.Entity<CheckRecord>()
+            .Property(record => record.Status)
+            .HasConversion(
+                status => status.ToString().ToUpperInvariant(),
+                text => Enum.Parse<ServiceStatus>(text, ignoreCase: true));
+
         // Cascade: deleting a service also deletes its check records in the database.
         modelBuilder.Entity<CheckRecord>()
             .HasOne<MonitoredService>()

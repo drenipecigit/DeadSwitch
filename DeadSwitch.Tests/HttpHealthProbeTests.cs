@@ -1,5 +1,6 @@
 using System.Net;
 using DeadSwitch.Application.Interfaces;
+using DeadSwitch.Domain;
 using DeadSwitch.Infrastructure.Monitoring;
 
 namespace DeadSwitch.Tests;
@@ -7,11 +8,11 @@ namespace DeadSwitch.Tests;
 public class HttpHealthProbeTests
 {
     [Theory]
-    [InlineData(200, "UP", null)]
-    [InlineData(204, "UP", null)]
-    [InlineData(302, "DOWN", "HTTP 302")]
-    [InlineData(503, "DOWN", "HTTP 503")]
-    public async Task ProbeRecordsHttpOutcome(int code, string status, string? failure)
+    [InlineData(200, ServiceStatus.Up, null)]
+    [InlineData(204, ServiceStatus.Up, null)]
+    [InlineData(302, ServiceStatus.Down, "HTTP 302")]
+    [InlineData(503, ServiceStatus.Down, "HTTP 503")]
+    public async Task ProbeRecordsHttpOutcome(int code, ServiceStatus status, string? failure)
     {
         StubHandler handler = new StubHandler((request, cancellationToken) =>
         {
@@ -40,7 +41,7 @@ public class HttpHealthProbeTests
 
         ProbeResult result = await probe.CheckAsync("https://example.com", 1, CancellationToken.None);
 
-        Assert.Equal("DOWN", result.Status);
+        Assert.Equal(ServiceStatus.Down, result.Status);
         Assert.Null(result.StatusCode);
         Assert.DoesNotContain("secret", result.FailureReason!);
     }
@@ -53,8 +54,30 @@ public class HttpHealthProbeTests
 
         ProbeResult result = await probe.CheckAsync("https://example.com", 1, CancellationToken.None);
 
-        Assert.Equal("DOWN", result.Status);
+        Assert.Equal(ServiceStatus.Down, result.Status);
         Assert.Equal("Check timed out.", result.FailureReason);
+    }
+
+    [Theory]
+    [InlineData("http://127.0.0.1/")]
+    [InlineData("ftp://example.com/")]
+    public async Task RejectedUrlIsRecordedAsUnknownWithoutSendingARequest(string url)
+    {
+        int requests = 0;
+        StubHandler handler = new StubHandler((request, cancellationToken) =>
+        {
+            requests++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        });
+        using HttpClient client = new HttpClient(handler);
+        HttpHealthProbe probe = new HttpHealthProbe(client);
+
+        ProbeResult result = await probe.CheckAsync(url, 1, CancellationToken.None);
+
+        Assert.Equal(ServiceStatus.Unknown, result.Status);
+        Assert.Null(result.StatusCode);
+        Assert.Equal("URL rejected by destination policy.", result.FailureReason);
+        Assert.Equal(0, requests);
     }
 
     [Fact]

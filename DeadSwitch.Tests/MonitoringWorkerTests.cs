@@ -24,10 +24,10 @@ public class MonitoringWorkerTests
         await worker.RunPassAsync(CancellationToken.None);
         Assert.Equal(1, app.Probe.Calls);
 
-        List<MonitoredService> services = (await client.GetFromJsonAsync<List<MonitoredService>>("/services"))!;
+        List<MonitoredService> services = (await client.GetFromJsonAsync<List<MonitoredService>>("/services", TestJson.Options))!;
         MonitoredService enabled = services.Single(service => service.IsEnabled);
         MonitoredService paused = services.Single(service => !service.IsEnabled);
-        Assert.Equal("UP", enabled.CurrentStatus);
+        Assert.Equal(ServiceStatus.Up, enabled.CurrentStatus);
         Assert.Null(paused.LastCheckedAt);
     }
 

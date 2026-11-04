@@ -3,6 +3,8 @@ using System.Net.Http.Json;
 using DeadSwitch.Application.Interfaces;
 using DeadSwitch.Application.Services;
 using DeadSwitch.Domain;
+using DeadSwitch.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace DeadSwitch.Tests;
@@ -21,16 +23,16 @@ public class ServiceCheckTests
         HttpResponseMessage check = await client.PostAsync($"/services/{created.Id}/check", null);
 
         check.EnsureSuccessStatusCode();
-        CheckRecord record = (await check.Content.ReadFromJsonAsync<CheckRecord>())!;
-        Assert.Equal("UP", record.Status);
+        CheckRecord record = (await check.Content.ReadFromJsonAsync<CheckRecord>(TestJson.Options))!;
+        Assert.Equal(ServiceStatus.Up, record.Status);
         Assert.Equal(200, record.StatusCode);
 
-        MonitoredService persisted = (await client.GetFromJsonAsync<MonitoredService>($"/services/{created.Id}"))!;
-        Assert.Equal("UP", persisted.CurrentStatus);
+        MonitoredService persisted = (await client.GetFromJsonAsync<MonitoredService>($"/services/{created.Id}", TestJson.Options))!;
+        Assert.Equal(ServiceStatus.Up, persisted.CurrentStatus);
         Assert.NotNull(persisted.LastCheckedAt);
         Assert.Equal(record.CheckedAtUtc, persisted.LastCheckedAt.Value.UtcDateTime);
 
-        List<CheckRecord> history = (await client.GetFromJsonAsync<List<CheckRecord>>($"/services/{created.Id}/history"))!;
+        List<CheckRecord> history = (await client.GetFromJsonAsync<List<CheckRecord>>($"/services/{created.Id}/history", TestJson.Options))!;
         CheckRecord onlyRecord = Assert.Single(history);
         Assert.Equal(record.Id, onlyRecord.Id);
     }
@@ -47,16 +49,60 @@ public class ServiceCheckTests
         firstCheck.EnsureSuccessStatusCode();
 
         app.Clock.Now = app.Clock.Now.AddSeconds(1);
-        app.Probe.Result = new ProbeResult("DOWN", 503, 31, "HTTP 503");
+        app.Probe.Result = new ProbeResult(ServiceStatus.Down, 503, 31, "HTTP 503");
         HttpResponseMessage secondCheck = await client.PostAsync($"/services/{created.Id}/check", null);
         secondCheck.EnsureSuccessStatusCode();
 
-        List<CheckRecord> firstPage = (await client.GetFromJsonAsync<List<CheckRecord>>($"/services/{created.Id}/history?take=1"))!;
+        List<CheckRecord> firstPage = (await client.GetFromJsonAsync<List<CheckRecord>>($"/services/{created.Id}/history?take=1", TestJson.Options))!;
         CheckRecord newest = Assert.Single(firstPage);
-        Assert.Equal("DOWN", newest.Status);
+        Assert.Equal(ServiceStatus.Down, newest.Status);
 
-        List<CheckRecord> secondPage = (await client.GetFromJsonAsync<List<CheckRecord>>($"/services/{created.Id}/history?skip=1&take=1"))!;
+        List<CheckRecord> secondPage = (await client.GetFromJsonAsync<List<CheckRecord>>($"/services/{created.Id}/history?skip=1&take=1", TestJson.Options))!;
         Assert.Single(secondPage);
+    }
+
+    [Fact]
+    public async Task UnknownResultReplacesEarlierStatusAndIsSavedInHistory()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService created = await app.RegisterServiceAsync(client, new ServiceConfiguration("Example", "https://example.com", IsEnabled: false));
+        HttpResponseMessage firstCheck = await client.PostAsync($"/services/{created.Id}/check", null);
+        firstCheck.EnsureSuccessStatusCode();
+
+        app.Clock.Now = app.Clock.Now.AddSeconds(1);
+        app.Probe.Result = new ProbeResult(ServiceStatus.Unknown, null, 3, "Destination address blocked by policy.");
+        HttpResponseMessage secondCheck = await client.PostAsync($"/services/{created.Id}/check", null);
+        secondCheck.EnsureSuccessStatusCode();
+
+        MonitoredService persisted = (await client.GetFromJsonAsync<MonitoredService>($"/services/{created.Id}", TestJson.Options))!;
+        Assert.Equal(ServiceStatus.Unknown, persisted.CurrentStatus);
+        List<CheckRecord> history = (await client.GetFromJsonAsync<List<CheckRecord>>($"/services/{created.Id}/history", TestJson.Options))!;
+        Assert.Equal(2, history.Count);
+        Assert.Equal(ServiceStatus.Unknown, history[0].Status);
+        Assert.Equal("Destination address blocked by policy.", history[0].FailureReason);
+        Assert.Equal(ServiceStatus.Up, history[1].Status);
+    }
+
+    // The existing rows hold this text, so the application must keep writing exactly the same.
+    [Fact]
+    public async Task StatusIsStoredAsUppercaseText()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService created = await app.RegisterServiceAsync(client, new ServiceConfiguration("Example", "https://example.com", IsEnabled: false));
+        HttpResponseMessage check = await client.PostAsync($"/services/{created.Id}/check", null);
+        check.EnsureSuccessStatusCode();
+
+        await using AsyncServiceScope scope = app.Services.CreateAsyncScope();
+        DeadSwitchDbContext db = scope.ServiceProvider.GetRequiredService<DeadSwitchDbContext>();
+        List<string> currentStatus = await db.Database.SqlQuery<string>($"SELECT CurrentStatus AS Value FROM MonitoredServices").ToListAsync();
+        List<string> recordStatus = await db.Database.SqlQuery<string>($"SELECT Status AS Value FROM CheckRecords").ToListAsync();
+
+        Assert.Equal("UP", Assert.Single(currentStatus));
+        Assert.Equal("UP", Assert.Single(recordStatus));
     }
 
     [Fact]
@@ -99,7 +145,7 @@ public class ServiceCheckTests
         cancellation.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => firstCheck);
-        List<CheckRecord> history = (await client.GetFromJsonAsync<List<CheckRecord>>($"/services/{service.Id}/history"))!;
+        List<CheckRecord> history = (await client.GetFromJsonAsync<List<CheckRecord>>($"/services/{service.Id}/history", TestJson.Options))!;
         Assert.Empty(history);
 
         // A new check can only succeed if the cancelled check released its lock.

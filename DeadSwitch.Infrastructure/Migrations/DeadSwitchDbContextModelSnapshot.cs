@@ -60,7 +60,10 @@ namespace DeadSwitch.Infrastructure.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("CurrentStatus")
-                        .HasColumnType("TEXT");
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("UNKNOWN");
 
                     b.Property<int>("IntervalSeconds")
                         .ValueGeneratedOnAdd()
