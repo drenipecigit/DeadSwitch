@@ -1,6 +1,59 @@
 @DeadSwitch.Api_HostAddress = http://localhost:5201
 
-GET {{DeadSwitch.Api_HostAddress}}/weatherforecast/
+# Replace with an id returned by POST /services.
+@serviceId = 00000000-0000-0000-0000-000000000000
+
+### Health of the API itself
+GET {{DeadSwitch.Api_HostAddress}}/health
 Accept: application/json
 
-###
+### Register a service
+POST {{DeadSwitch.Api_HostAddress}}/services
+Content-Type: application/json
+
+{
+  "name": "Example",
+  "url": "https://example.com",
+  "intervalSeconds": 60,
+  "timeoutSeconds": 10,
+  "isEnabled": false
+}
+
+### List all services
+GET {{DeadSwitch.Api_HostAddress}}/services
+Accept: application/json
+
+### Get one service
+GET {{DeadSwitch.Api_HostAddress}}/services/{{serviceId}}
+Accept: application/json
+
+### Update a service (send every field: missing fields fall back to their defaults)
+PUT {{DeadSwitch.Api_HostAddress}}/services/{{serviceId}}
+Content-Type: application/json
+
+{
+  "name": "Example",
+  "url": "https://example.com",
+  "intervalSeconds": 120,
+  "timeoutSeconds": 10,
+  "isEnabled": false
+}
+
+### Run a manual check and save it to the history
+POST {{DeadSwitch.Api_HostAddress}}/services/{{serviceId}}/check
+Accept: application/json
+
+### Read the check history
+GET {{DeadSwitch.Api_HostAddress}}/services/{{serviceId}}/history?skip=0&take=50
+Accept: application/json
+
+### Delete a service and its history
+DELETE {{DeadSwitch.Api_HostAddress}}/services/{{serviceId}}
+
+### Check any public URL without saving anything
+GET {{DeadSwitch.Api_HostAddress}}/check?url=https://example.com
+Accept: application/json
+
+### Compatibility route: same as the POST check above, and it also saves to the history
+GET {{DeadSwitch.Api_HostAddress}}/services/{{serviceId}}/check
+Accept: application/json
