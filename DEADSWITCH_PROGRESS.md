@@ -72,7 +72,7 @@ There were three separate causes, each fixed by its own change, with the tests r
 2. A check can only start on a poll, so the interval was rounded up to a multiple of it. A default poll of 1 second fixed intervals 12 and 17.
 3. Two nearly equal times were compared, so a pass a few milliseconds early missed the check. A tolerance of 250 ms fixed the last two cases.
 
-Interval 10 with the default poll in the real loop was green on the old code, because that probe takes no time. The response time is tested with passes run by hand: moving the fake clock during a pass also moves the next tick of the fake timer. A tick expected at 20 s came at 20.2 s when measured. The real timer has not been measured.
+Interval 10 with the default poll in the real loop was green on the old code, because that probe takes no time. The response time is tested with passes run by hand: moving the fake clock during a pass also moves the next tick of the fake timer. A tick expected at 20 s came at 20.2 s when measured. The real timer has been measured once, at interval 10; see "Manual run".
 
 ### Mutation check of the worker and the lock check
 
@@ -215,10 +215,10 @@ Done by the owner against a newly created database:
 Done by the owner on 2026-11-04:
 
 - `GET /check?url=http://github.com` returned UP with status code 301. This is a redirect from a real website through the whole chain, and the status code shows that the redirect was not followed.
+- The background worker against a real database, with its own database file: `intervalSeconds` = 10 against `https://github.com` with a poll of 1 second. 16 gaps between checks: minimum 9.975 s, maximum 10.001 s, mean 9.9985 s, all UP with status code 200. A check with a response time of 104 ms still gave a gap of 10.001 s. This is one run with one interval and one poll.
 
 ### Never run so far
 
-- The background worker's loop against a real database.
 - A hostname on the real network that resolves to a private address. Tests cover this with `localhost` and a fake DNS.
 - The compatibility route against the real network.
 
@@ -263,7 +263,7 @@ Dependency injection lifetimes were reviewed by reading the code only.
 |---|---|---|
 | CRUD and validation | Partial | `PUT` without `isEnabled` enables a paused service. Malformed JSON is untested |
 | Manual check and history | Done | |
-| Background worker | Proven by tests, manual run open | Loop, error isolation, shutdown and interval are proven with a fake clock. The real timer against a real database has not been run, so 250 ms is a judgement and real timer jitter is not measured |
+| Background worker | Done | Loop, error isolation, shutdown and interval are proven with a fake clock, and one manual run against a real database confirms interval 10 with a poll of 1 second. Intervals 12 and 17 are proven with the fake clock only |
 | No overlapping checks | Partial | Protects a single process only; see the lock limitation below |
 | Status UP / DOWN / UNKNOWN | Done | Proven by tests. A 3xx from a real website is confirmed by a manual run |
 | History endpoint | **Bug, confirmed** | `POST /services/{id}/check` returns `checkedAtUtc` with `Z`, but `GET /services/{id}/history` returns the same time without `Z`. A client can read it as local time. Not fixed yet |
@@ -344,7 +344,7 @@ The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes ea
 2. Done: `fix/service-locks`: one lock per service, with a test that different services do not block each other.
 3. Done: `fix/status-enum`: add `ServiceStatus`. A timeout is DOWN and a blocked address is UNKNOWN.
 4. Done: `fix/redirect-status`: 3xx is UP, without following the redirect. Document the limitation.
-5. Done: `test/worker-loop`: test error isolation, shutdown and worker against manual check. A manual run had shown that `intervalSeconds` = 10 usually became 15 seconds. The cause is confirmed and fixed; see "Red runs of the check interval". A manual run against a real database is still open.
+5. Done: `test/worker-loop`: test error isolation, shutdown and worker against manual check. A manual run had shown that `intervalSeconds` = 10 usually became 15 seconds. The cause is confirmed and fixed; see "Red runs of the check interval". A manual run against a real database confirms it at interval 10; see "Manual run".
 6. `fix/api-contract`: dedicated validation exception, 400 on malformed JSON, safe `PUT` defaults, and UTC timestamps with `Z` (the confirmed bug above). This task must start from the contract change below.
 
 **Contract change from `test/worker-loop`:** `checkedAtUtc` in the check responses and the history now means when the check **started**, not when it ended. The same applies to `lastCheckedAt` on the service and in the compatibility route. The field names and the format are unchanged. Check records saved before this change keep their end time. A record's end time is not stored, but it can be estimated by adding `responseTimeMs`.
