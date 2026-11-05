@@ -34,6 +34,7 @@ public class LocalOnlyCheckTests
     [InlineData("http://mymachine:5201")]
     [InlineData("http://localhost.evil.example:5201")]
     [InlineData("http://unix:/tmp/deadswitch.sock")]
+    [InlineData("http://unix:C:/temp/deadswitch.sock")]
     [InlineData("not an address")]
     [InlineData("")]
     public void AnyOtherAddressIsNotLocal(string address)
