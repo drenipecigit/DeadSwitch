@@ -39,6 +39,14 @@ public class DeadSwitchDbContext(DbContextOptions<DeadSwitchDbContext> options) 
                 status => status.ToString().ToUpperInvariant(),
                 text => Enum.Parse<ServiceStatus>(text, ignoreCase: true));
 
+        // SQLite stores the time as text without a zone, so EF Core reads it back as Unspecified and
+        // the JSON loses its Z. Everything written here is UTC, so the value is marked as UTC when read.
+        modelBuilder.Entity<CheckRecord>()
+            .Property(record => record.CheckedAtUtc)
+            .HasConversion(
+                time => time,
+                stored => DateTime.SpecifyKind(stored, DateTimeKind.Utc));
+
         // Cascade: deleting a service also deletes its check records in the database.
         modelBuilder.Entity<CheckRecord>()
             .HasOne<MonitoredService>()
