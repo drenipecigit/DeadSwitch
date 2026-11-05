@@ -71,7 +71,7 @@ public sealed class HttpHealthProbe : IHealthProbe
             string failureReason = "Connection, DNS or TLS failure.";
             return new ProbeResult(ServiceStatus.Down, null, stopwatch.ElapsedMilliseconds, failureReason);
         }
-        catch (ArgumentException)
+        catch (ServiceValidationException)
         {
             // Unknown and not Down: the URL was rejected before any request was sent.
             return new ProbeResult(ServiceStatus.Unknown, null, stopwatch.ElapsedMilliseconds, "URL rejected by destination policy.");

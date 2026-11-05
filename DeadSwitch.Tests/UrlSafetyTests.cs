@@ -39,7 +39,7 @@ public class UrlSafetyTests
     [InlineData(null)]
     public void UnsafeUrlsAreRejected(string? url)
     {
-        Assert.Throws<ArgumentException>(() => UrlSafety.Validate(url));
+        Assert.Throws<ServiceValidationException>(() => UrlSafety.Validate(url));
     }
 
     [Theory]
@@ -61,7 +61,7 @@ public class UrlSafetyTests
     [MemberData(nameof(UnicodeHostUrls.CannotBeConverted), MemberType = typeof(UnicodeHostUrls))]
     public void HostsThatConnectSomewhereForbiddenOrCannotBeConvertedAreRejected(string url)
     {
-        Assert.Throws<ArgumentException>(() => UrlSafety.Validate(url));
+        Assert.Throws<ServiceValidationException>(() => UrlSafety.Validate(url));
     }
 
     [Theory]
@@ -78,7 +78,7 @@ public class UrlSafetyTests
         string atLimit = start + new string('a', 2048 - start.Length);
 
         Assert.NotNull(UrlSafety.Validate(atLimit));
-        Assert.Throws<ArgumentException>(() => UrlSafety.Validate(atLimit + "a"));
+        Assert.Throws<ServiceValidationException>(() => UrlSafety.Validate(atLimit + "a"));
     }
 
     // Each range is tested at its first and last address, so a rule that is one step off fails.
@@ -198,6 +198,6 @@ public class UrlSafetyTests
     [InlineData("http://test.localhost.")]
     public void LocalhostWithTrailingDotIsRejected(string url)
     {
-        Assert.Throws<ArgumentException>(() => UrlSafety.Validate(url));
+        Assert.Throws<ServiceValidationException>(() => UrlSafety.Validate(url));
     }
 }

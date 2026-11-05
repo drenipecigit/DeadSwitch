@@ -14,6 +14,9 @@ internal sealed class TestRepositoryControl
     // When true, GetAllAsync throws. Volatile, because the worker reads it on another thread.
     public volatile bool FailGetAll;
 
+    // When set, GetAllAsync throws this one, so a test can choose the type and the text.
+    public volatile Exception? ExceptionFromGetAll;
+
     public void RememberLockCount(int lockCount)
     {
         lock (_sync)

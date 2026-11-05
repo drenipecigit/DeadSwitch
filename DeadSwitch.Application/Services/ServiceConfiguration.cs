@@ -13,19 +13,19 @@ public record ServiceConfiguration(
     {
         if (string.IsNullOrWhiteSpace(Name) || Name.Trim().Length > 200)
         {
-            throw new ArgumentException("Name must contain 1 to 200 characters.");
+            throw new ServiceValidationException("Name must contain 1 to 200 characters.");
         }
 
         UrlSafety.Validate(Url);
 
         if (IntervalSeconds < 10 || IntervalSeconds > 86400)
         {
-            throw new ArgumentException("IntervalSeconds must be between 10 and 86400.");
+            throw new ServiceValidationException("IntervalSeconds must be between 10 and 86400.");
         }
 
         if (TimeoutSeconds < 1 || TimeoutSeconds > 60)
         {
-            throw new ArgumentException("TimeoutSeconds must be between 1 and 60.");
+            throw new ServiceValidationException("TimeoutSeconds must be between 1 and 60.");
         }
     }
 }

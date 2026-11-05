@@ -17,12 +17,12 @@ public static class UrlSafety
         Uri? uri = ParseAllowedForm(url);
         if (uri == null)
         {
-            throw new ArgumentException("Url must be an absolute HTTP(S) URL on port 80 or 443, without credentials or fragment.");
+            throw new ServiceValidationException("Url must be an absolute HTTP(S) URL on port 80 or 443, without credentials or fragment.");
         }
 
         if (!HasPublicHost(uri))
         {
-            throw new ArgumentException("Url must address the public Internet.");
+            throw new ServiceValidationException("Url must address the public Internet.");
         }
 
         return uri;

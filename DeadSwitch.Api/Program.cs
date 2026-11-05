@@ -80,8 +80,9 @@ app.Use(async (context, next) =>
     {
         await next(context);
     }
-    catch (ArgumentException ex)
+    catch (ServiceValidationException ex)
     {
+        // Safe to show: this exception only ever holds fixed texts that we wrote ourselves.
         IResult problem = Results.Problem(statusCode: 400, title: "Invalid configuration", detail: ex.Message);
         await problem.ExecuteAsync(context);
     }

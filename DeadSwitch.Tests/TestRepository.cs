@@ -30,6 +30,11 @@ internal sealed class TestRepository : IMonitoredServiceRepository
             throw new InvalidOperationException("The test made the repository fail.");
         }
 
+        if (_control.ExceptionFromGetAll != null)
+        {
+            throw _control.ExceptionFromGetAll;
+        }
+
         return _real.GetAllAsync(ct);
     }
 
