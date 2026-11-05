@@ -99,6 +99,50 @@ public class ServiceUpdateTests
         Assert.Equal(enabledAfter, saved.IsEnabled);
     }
 
+    // The same rule as POST: a service must not be pointed at this machine or the internal network.
+    // Only the fake probe is used and PUT sends no request, so no address here is ever contacted.
+    [Theory]
+    [InlineData("http://127.0.0.1")]
+    [InlineData("http://[::1]")]
+    [InlineData("http://localhost")]
+    [InlineData("http://2130706433")]
+    [InlineData("http://10.0.0.1")]
+    [InlineData("http://169.254.169.254/latest/meta-data")]
+    [InlineData("ftp://127.0.0.1")]
+    [InlineData("http://user:pw@127.0.0.1")]
+    [InlineData("http://127.0.0.1:8080")]
+    public async Task UpdateToAForbiddenUrlGives400AndLeavesTheServiceAsItWas(string forbiddenUrl)
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService service = await app.RegisterServiceAsync(client, new ServiceConfiguration("Example", "https://example.com"));
+        HttpResponseMessage check = await client.PostAsync($"/services/{service.Id}/check", null);
+        check.EnsureSuccessStatusCode();
+        string before = await client.GetStringAsync($"/services/{service.Id}");
+        int callsBefore = app.Probe.Calls;
+
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/services/{service.Id}", new ServiceConfiguration("Example", forbiddenUrl));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        string after = await client.GetStringAsync($"/services/{service.Id}");
+        Assert.Equal(before, after);
+        Assert.Equal(callsBefore, app.Probe.Calls);
+    }
+
+    // The URL is validated first, so the answer says nothing about whether the service exists.
+    [Fact]
+    public async Task UpdateToAForbiddenUrlGives400AlsoWhenTheServiceDoesNotExist()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/services/{Guid.NewGuid()}", new ServiceConfiguration("Example", "http://127.0.0.1"));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
     // A new service has no earlier value to overwrite, so POST keeps its default values.
     [Fact]
     public async Task RegisteringWithoutOptionalFieldsUsesTheDefaultValues()
