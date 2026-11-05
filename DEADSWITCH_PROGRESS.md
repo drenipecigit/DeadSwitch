@@ -315,9 +315,10 @@ Done by the owner on 2026-11-04:
 
 Run against the real server (Kestrel) on 2026-11-05, in Windows PowerShell 5.1 against `localhost` in Development, with its own database file and the worker turned off. Only routes that send no traffic out were used: malformed JSON and `GET /check` without a URL gave the fixed 400, a wrong content type gave the fixed 415, `PUT` without `isEnabled` gave 400 and the service stayed paused, and unusual host names on `POST`, `PUT` and `GET /check` gave 400.
 
+Done by the owner on 2026-11-05, against the real server (Kestrel) in Windows PowerShell 5.1, with its own database file: `POST /services/{id}/check` against `https://example.com` gave UP with status code 200. `checkedAtUtc` in the answer, the same field in `GET /services/{id}/history` and `lastCheckedAt` in `GET /services/{id}` all held the same time, `2026-11-05T07:15:53.2904021Z`, with `Z`.
+
 ### Never run so far
 
-- `GET /services/{id}/history` after a real check on the real server, which is what would show the `Z` outside the tests.
 - The API on the real server in Production.
 - A hostname on the real network that resolves to a private address. Tests cover this with `localhost` and a fake DNS.
 - The compatibility route against the real network.
@@ -373,7 +374,7 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | Background worker | Done | Loop, error isolation, shutdown and interval are proven with a fake clock, and one manual run against a real database confirms interval 10 with a poll of 1 second. Intervals 12 and 17 are proven with the fake clock only |
 | No overlapping checks | Partial | Protects a single process only; see the lock limitation below |
 | Status UP / DOWN / UNKNOWN | Done | Proven by tests. A 3xx from a real website is confirmed by a manual run |
-| History endpoint | Done | Proven by tests, with `Z` on every time. A manual run after a real check is still open |
+| History endpoint | Done | Proven by tests, with `Z` on every time, and confirmed by a manual run after a real check |
 | SSRF protection | Done for HTTP | Proven by tests against a local server. HTTPS through the connector is untested; see the security notes |
 | Tests for all of the above | Done for phase 1 | The limits are listed under "Not proven by a test" and "Never run so far" |
 | README | Missing | |
@@ -463,7 +464,7 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes early so that every new feature is visible in it at once. The MVP still covers phases 1 to 4; the dashboard is built earlier but is not part of the MVP. Each task is one branch, with a plan approved first.
 
-**Next step:** the owner reviews and merges `fix/api-contract`. After that comes phase 2, notifications, with a plan approved first.
+**Next step:** phase 2, notifications, on the branch `feat/discord-notifications`.
 
 ### Phase 1: Stable foundation
 
