@@ -17,6 +17,9 @@ public class DiscordWebhookUrlTests
     // Scheme
     [InlineData("http://discord.com/api/webhooks/123/token")]
     [InlineData("ftp://discord.com/api/webhooks/123/token")]
+    // Port 443 written out, so only the scheme rule can stop these two.
+    [InlineData("http://discord.com:443/api/webhooks/123/token")]
+    [InlineData("ftp://discord.com:443/api/webhooks/123/token")]
     // Another host
     [InlineData("https://example.com/api/webhooks/123/token")]
     [InlineData("https://discord.com.example.com/api/webhooks/123/token")]

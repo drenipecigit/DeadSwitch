@@ -10,9 +10,9 @@ DeadSwitch is a personal uptime monitor. The backend is **not finished**: see th
 
 | Project | Contains | References |
 |---|---|---|
-| `DeadSwitch.Domain` | `MonitoredService`, `CheckRecord`, `ServiceStatus` | nothing |
-| `DeadSwitch.Application` | `MonitoredServiceService`, `ServiceConfiguration`, `UrlSafety`, `ServiceLocks`, `ServiceValidationException`, `CheckInProgressException`, interfaces | Domain |
-| `DeadSwitch.Infrastructure` | `DeadSwitchDbContext`, repository, `HttpHealthProbe`, `ProtectedHttpHandler`, `PublicInternetConnector`, `DestinationBlockedException`, migrations | Application, Domain |
+| `DeadSwitch.Domain` | `MonitoredService`, `CheckRecord`, `ServiceStatus`, `StatusChangeRule` | nothing |
+| `DeadSwitch.Application` | `MonitoredServiceService`, `ServiceConfiguration`, `UrlSafety`, `ServiceLocks`, `ServiceValidationException`, `CheckInProgressException`, `NotificationFailedException`, `StatusChange`, interfaces including `INotifier` | Domain |
+| `DeadSwitch.Infrastructure` | `DeadSwitchDbContext`, repository, `HttpHealthProbe`, `ProtectedHttpHandler`, `PublicInternetConnector`, `DestinationBlockedException`, `DiscordNotifier`, `DiscordMessage`, `DiscordOptions`, `DiscordWebhookUrl`, migrations | Application, Domain |
 | `DeadSwitch.Api` | Startup in `Program.cs`, `ServiceEndpoints`, `RegisterServiceRequest`, `UpdateServiceRequest`, `UtcDateTimeOffsetConverter`, `MonitoringWorker` | Application, Domain, Infrastructure |
 | `DeadSwitch.Tests` | Automated tests | Api, and the other projects through it |
 
@@ -50,6 +50,14 @@ DeadSwitch is a personal uptime monitor. The backend is **not finished**: see th
 
 A `404` has an empty body.
 
+**`lastKnownStatus`.** A service in the JSON also has `lastKnownStatus`: `UP`, `DOWN` or null when nothing is known for the current URL. It is read-only: `POST` and `PUT` ignore it.
+
+## Configuration
+
+| Key | Environment variable | Meaning |
+|---|---|---|
+| `Discord:WebhookUrl` | `Discord__WebhookUrl` | The Discord webhook address. A secret: set it with `dotnet user-secrets` in Development, or as an environment variable elsewhere. Never in `appsettings.json` or git. Empty or missing turns notifications off |
+
 ## Migrations
 
 | Migration | Change |
@@ -59,8 +67,9 @@ A `404` has an empty body.
 | `AddLastCheckedAtToMonitoredService` | Adds `LastCheckedAt` |
 | `AddMonitoringHistoryAndScheduling` | Adds `IntervalSeconds`, `TimeoutSeconds` and `IsEnabled`, and creates `CheckRecords` with cascade delete. Existing rows stay paused because `IsEnabled` defaults to false |
 | `MakeCurrentStatusRequired` | Makes `CurrentStatus` NOT NULL with the default `UNKNOWN`. Rows with NULL become `UNKNOWN`, other values and all check records are kept. SQLite rebuilds the table for this, with foreign keys turned off around the drop so that the cascade does not delete the history |
+| `AddLastKnownStatusToMonitoredService` | Adds the nullable `LastKnownStatus` and copies `CurrentStatus` into it where that is `UP` or `DOWN`, so that an existing service does not lose its next change. `UNKNOWN` stays NULL. `CurrentStatus` cannot do this job: after UP, UNKNOWN, DOWN it no longer remembers that the service was up |
 
-The application does not run migrations at startup. Run `dotnet ef database update` when setting up a database. `MakeCurrentStatusRequired` has run in the tests and from empty against a separate database file, but not against the local development database. Run the command there as well.
+The application does not run migrations at startup. Run `dotnet ef database update` when setting up a database, and after pulling a new migration: without it, reading a service fails because the column is missing. `MakeCurrentStatusRequired` has run in the tests and from empty against a separate database file, but not against the local development database. Run the command there as well.
 
 Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, so old rows did not need rewriting.
 
@@ -71,9 +80,93 @@ Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, s
 Date: 2026-11-05.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
-- `dotnet test DeadSwitch.slnx`: 470 passed, 0 failed, five runs in a row.
-- Of the 470 tests, 162 only classify URLs and IP addresses, 17 run the real connection code against a local server, 16 test the probe with a stub handler, 11 run the real probe and handler with a fake DNS, 7 test `ServiceLocks` directly, 134 test unusual host names through the API, the worker and the real probe with a fake probe or a fake DNS, and 123 use the API, the worker or the migrations with a fake probe and an in-memory database.
-- Without the 68 tests that carry the trait `NameLookupWithoutConnector`: 402 passed.
+- `dotnet test DeadSwitch.slnx`: 623 passed, 0 failed, five runs in a row, and once more with an invalid `Discord__WebhookUrl` in the environment.
+- 470 of the tests come from phase 1: 162 only classify URLs and IP addresses, 17 run the real connection code against a local server, 16 test the probe with a stub handler, 11 run the real probe and handler with a fake DNS, 7 test `ServiceLocks` directly, 134 test unusual host names through the API, the worker and the real probe with a fake probe or a fake DNS, and 123 use the API, the worker or the migrations with a fake probe and an in-memory database.
+- 153 come from phase 2: 60 classify webhook addresses, 12 test the rule directly, 29 test the real notifier with a stub handler, 2 test the registered handler against a local server, 13 run the real registration with a stub handler, 36 use the API, the worker or the migrations with a fake notifier, and 1 reads the settings files.
+- Without the 68 tests that carry the trait `NameLookupWithoutConnector`: 555 passed.
+- No test sends anything to Discord. A real message has not been sent yet; see "Waiting for a manual run".
+
+### Red runs of the notifications
+
+Each group ran against an empty version of the code, before the real one was written.
+
+| Tests | Run against | Result |
+|---|---|---|
+| The rule, 12 rows | `ShouldNotify` always false | 4 failed: every row that should notify |
+| Webhook addresses, 58 rows | `IsAllowed` always true | 53 failed; 5 could not be red, because they expect an accepted or empty address, or test the fixed text |
+| The real notifier, 29 tests | Sends plain text, with no checks | 27 failed; the 2 that passed test a successful answer |
+| Notifications from checks | `CheckAsync` sends nothing | 21 failed |
+| The address in the log | Sending on, `RemoveAllLoggers` missing | 4 failed: the framework wrote the whole address with its token to the log. This confirms the leak is real |
+
+### Mutation check of the notifications
+
+The code was broken on purpose, one change at a time, running all tests and restoring the file from a backup. The changes were never committed. All of them ran against a fake notifier, a stub handler or `127.0.0.1`, and no mutation gave the notifier a client of its own, because that would send a real request.
+
+| Change | Failing tests |
+|---|---|
+| The rule notifies on UP to UNKNOWN | 4 |
+| The rule does not notify on null to DOWN | 18 |
+| The rule notifies on null to UP | 14 |
+| The rule notifies on null to UNKNOWN | 3 |
+| The rule notifies on every check | 19 |
+| `PreviousStatus` is the new status | 10 |
+| The message does not say "first check" | 1 |
+| UNKNOWN overwrites `LastKnownStatus` | 6 |
+| `LastKnownStatus` is never written | 18 |
+| A new URL does not empty the status | 3 |
+| A new name empties the status | 1 |
+| The migration does not copy the value | 1 |
+| The notification comes before the save | 3 |
+| The notification comes inside the lock | 1 |
+| No `catch (Exception)` | 2 |
+| No `catch (NotificationFailedException)` | 3 |
+| The exception object goes to the logger | 2 |
+| A change to UNKNOWN is not logged | 1 |
+| `RemoveAllLoggers` removed for Discord | 4 |
+| The inner exception is kept | 1 |
+| The failure text holds the exception's text | 2 |
+| The failure text holds the address | 5 |
+| No `catch (HttpRequestException)` | 2 |
+| No timeout | 1 |
+| The default timeout is 100 seconds | 1 |
+| The answer's status is not checked | 5 |
+| `wait=true` removed | 2 |
+| `allowed_mentions` removed | 5 |
+| `parse` holds `everyone` | 5 |
+| The name is not cut | 3 |
+| The URL is not cut | 2 |
+| The cut ignores emoji | 1 |
+| A backtick is not replaced | 1 |
+| A control character is not replaced | 3 |
+| The query is kept | 1 |
+| No address does not return at once | 4 |
+| A plain handler instead of the protected one | 2 |
+| `Validate` removed | 5 |
+| `ValidateOnStart` removed | 0; see below |
+| The startup line says the opposite | 3 |
+| A validation failure shows the address | 7 |
+| Address rule removed: only plain ASCII | 0; see below |
+| Address rule removed: the same text as `Uri` writes | 4 |
+| Address rule removed: https | 2 |
+| Address rule removed: port | 1 |
+| Address rule removed: credentials | 1 |
+| Address rule removed: query | 2 |
+| Address rule removed: fragment | 1 |
+| Address rule removed: host | 9 |
+| `discordapp.com` not allowed | 1 |
+| Address rule removed: start of the path | 1 |
+| Address rule removed: exactly two parts | 4 |
+| Address rule removed: digits | 3 |
+| Address rule removed: plain token | 2 |
+| `TestApp` does not set the address | 12 |
+| `TestApp` keeps the real notifier | 17 |
+
+The rows with 0 failing tests, which stay on purpose as defence in depth:
+
+- `ValidateOnStart`: `Program.cs` reads the options right after `Build` for the startup line, which runs the same validation.
+- Only plain ASCII: every such address is also stopped by the comparison with what `Uri` writes, or by the token rule.
+
+The https row first gave 0 failing tests, which was a real gap in the tests: `http://discord.com:443/...` passes the port rule and only the scheme rule stops it. Two rows were added, and that row was then run again. The other rows ran before those two were added.
 
 ### Red runs of the API contract
 
@@ -317,6 +410,20 @@ Run against the real server (Kestrel) on 2026-11-05, in Windows PowerShell 5.1 a
 
 Done by the owner on 2026-11-05, against the real server (Kestrel) in Windows PowerShell 5.1, with its own database file: `POST /services/{id}/check` against `https://example.com` gave UP with status code 200. `checkedAtUtc` in the answer, the same field in `GET /services/{id}/history` and `lastCheckedAt` in `GET /services/{id}` all held the same time, `2026-11-05T07:15:53.2904021Z`, with `Z`.
 
+Run against the real server (Kestrel) on 2026-11-05 with its own database file and no checks, so that nothing left the machine: with no webhook address the startup line says that notifications are off, and an invalid address in `Discord__WebhookUrl` stops the application with the fixed text and without showing the address. The `POST` and `PUT` commands for the manual run were tried in Windows PowerShell 5.1.
+
+### Waiting for a manual run
+
+The owner runs these against an own Discord channel. Until then, phase 2 is not done.
+
+- A real message reaches the channel: UP to DOWN, DOWN to UP, and DOWN at once for a new faulty URL. No message on a repeated status.
+- `@everyone`, `@here` and a mention in a name give no ping, and a link in a name is shown as text.
+- A query in the URL is not shown in the message.
+- `/api/webhooks/` on `discord.com` is the right path. The documentation only shows `/webhooks/{id}/{token}`, without a host.
+- A wrong token: the check is saved and the log shows the status code.
+- The log holds no webhook address after a real send.
+- Setting the secret through standard input with `dotnet user-secrets set`.
+
 ### Never run so far
 
 - The API on the real server in Production.
@@ -362,6 +469,13 @@ The automated tests still cover a redirect in two separate parts, because `UrlSa
 - Failures from the DNS step, including `ArgumentException`, give DOWN through the real handler.
 - Unreadable JSON and parameters give a fixed 400, and a wrong content type a fixed 415, in both Development and Production on the test server.
 - Validation errors have exact fixed texts and never repeat the URL. A 500 shows nothing from the exception. No error answer contains a stack trace, a class name, a path or a JSON position, as far as a list of forbidden texts can show.
+- A notification is sent on UP to DOWN and DOWN to UP, and on DOWN when nothing is known yet, from `POST`, the compatibility route and the worker. A repeated status, a first UP and UNKNOWN send nothing. UNKNOWN does not change what is remembered. A new URL forgets the old status and a new name does not. `GET /check` never notifies.
+- A notification is sent after the check is saved and after the lock is released. A failed save or a cancelled check sends nothing.
+- A failed notification keeps the check, is logged, and the worker goes on to the next service.
+- What is sent to Discord: a POST with `wait=true` and an empty `parse`, also with `@everyone` in the name; the name and URL as inline code, cut within the limit, with no query. Any answer that is not a success gives a fixed failure after one request, and a Discord that never answers gives one after the timeout.
+- The webhook address is only accepted in its exact form, is checked at startup, and is missing from every log line, exception text and API answer the tests can see, at the lowest log level.
+- Without an address the application works as before, in Development and Production, and sends nothing.
+- The ordinary tests use a fake notifier, also when the environment holds another address.
 
 Dependency injection lifetimes were reviewed by reading the code only.
 
@@ -377,8 +491,25 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | History endpoint | Done | Proven by tests, with `Z` on every time, and confirmed by a manual run after a real check |
 | SSRF protection | Done for HTTP | Proven by tests against a local server. HTTPS through the connector is untested; see the security notes |
 | Tests for all of the above | Done for phase 1 | The limits are listed under "Not proven by a test" and "Never run so far" |
+| Notification on UP to DOWN and DOWN to UP | Partial | Proven by tests with a fake notifier and a stub. No real message has been sent; see "Waiting for a manual run" |
+| `INotifier` with a Discord webhook | Partial | The same |
+| Webhook address outside git | Done | Proven by tests of the settings files and the log. Setting the secret is part of the manual run |
 | README | Missing | |
 | GitHub Actions | Missing | Waits for the owner's approval |
+
+## Notification rules
+
+`StatusChangeRule` compares `LastKnownStatus` with the new status. Worker and manual checks share `MonitoredServiceService.CheckAsync`, so they behave the same.
+
+| Last known | New | Notification | Why |
+|---|---|---|---|
+| UP | DOWN | Yes | |
+| DOWN | UP | Yes | |
+| UP or DOWN | The same | No | Nothing changed |
+| Any | UNKNOWN | No | No request was sent, so nothing was learned. A change to UNKNOWN is logged as a warning |
+| Nothing: a new service or a new URL | DOWN | Yes | A misspelled URL that is down from its first check would otherwise never give an alarm |
+| Nothing: a new service or a new URL | UP | No | Nothing to warn about |
+| Nothing: a new service or a new URL | UNKNOWN | No | The status stays empty |
 
 ## Status rules
 
@@ -412,6 +543,13 @@ Check records saved before this rule keep their old status: an earlier 3xx stays
 - Code in the framework that answers before the middleware, such as Kestrel's own HTTP errors, does not use the fixed error texts. This has not been tested.
 - How the time fields are described in the OpenAPI document with the converter in place has not been checked.
 - A value in a status column other than `UP`, `DOWN` or `UNKNOWN` makes reading that row fail. The application only writes these three, so this needs a manual edit of the database.
+- A notification that fails, or a crash between the save and the send, loses that alarm. There is no retry, and the status will not change again until the service does.
+- A 429 from Discord is logged but not waited out. How rate limits work for webhooks has not been read or tested.
+- A service that keeps switching gives one message per change, and one timeout is enough for a DOWN message.
+- Two checks shortly after each other could in theory send their messages in the wrong order, because they are sent outside the lock.
+- A status change can make a manual check answer up to 5 seconds later. During a Discord outage, many changes delay a worker pass by up to 5 seconds per service.
+- A name that starts to point to a private address gives UNKNOWN, which is only seen in the log. It could be worth a notification of its own in phase 3.
+- A service already UNKNOWN at its first check logs no warning, because nothing changed.
 
 ## Code style exceptions
 
@@ -424,6 +562,9 @@ These parts do not yet follow the project's plain style, on purpose:
 - `UtcDateTimeOffsetConverter` is a class with an abstract `Read` method that no request uses, because `System.Text.Json` has no setting for the time format.
 - `UrlSafety.GetConnectionHost` uses `try`/`catch` and returns null. `Uri.IdnHost` has no version that avoids the exception, and a host that cannot be converted must be rejected.
 - `Program.cs` checks for 415 after the next middleware instead of catching an exception, because the framework throws nothing for a wrong content type.
+- `DiscordWebhookUrl.IsAllowed` has many separate checks, some of which overlap. They are kept on purpose: the protection must not depend on how the other checks happen to work. The mutation check shows that removing the ASCII check changes no test.
+- `ValidateOnStart` is kept for Discord although the startup line reads the options anyway, for the same reason.
+- `MonitoredServiceService.SendNotificationAsync` catches `Exception` but does not pass it to the logger, because its text could hold the webhook address.
 
 ## Security notes
 
@@ -455,6 +596,20 @@ Error answers:
 - Only `ServiceValidationException` and `CheckInProgressException` show their message, and both hold fixed texts. The middleware no longer catches `ArgumentException`, so an internal error cannot become a 400 that shows its text.
 - The tests of leaks search for a list of forbidden texts. They prove exact answers for the known cases, not for every possible failure. Only the answer is tested: exception texts in the log are intended.
 
+The Discord webhook:
+- The address is a secret, because its token is all anyone needs to post to the channel. User secrets are a plain unencrypted file in the user's profile: they protect against git, not against someone who can read that profile. If the address leaks, delete the webhook in Discord and create a new one.
+- There is no new way out. The Discord client uses the same `ProtectedHttpHandler` as the probe, so no redirect can move the message, no proxy sees it, and a private address stays blocked. The difference is the destination: the probe goes where a user says, while this client only goes to the address checked at startup, and nothing a user sends can change it. User data only reaches the JSON body.
+- The automatic logging of `HttpClient` writes the whole address, so it is removed for this client. A red test confirmed the leak.
+- `NotificationFailedException` holds fixed texts and no inner exception, and an unexpected exception is logged by type only.
+- The name and URL come from the user. Pings are turned off with an empty `parse`, and inline code stops markdown, links and link previews. A query is removed, because it can hold a token that Discord has no reason to see.
+
+Checked against Discord's documentation, on the webhook and message pages only:
+- `content` is limited to 2000 characters. How they are counted is not stated, so the limits here leave a wide margin: the longest message also fits in 2000 bytes.
+- `allowed_mentions` is a parameter of Execute Webhook, and `{"parse": []}` is the documented way to suppress all mentions. The example shows a normal message.
+- The answer is a message or 204 depending on `wait`. It defaults to false, and then "a message that is not saved does not return an error". That is why `wait=true` is sent.
+- The `/slack` and `/github` variants exist, which is why the address rule rejects them.
+- The pages say nothing about `/api/` in the path or about rate limits.
+
 Untested assumption:
 - `168.63.129.16` (an Azure platform address) counts as public. This matters if the API is hosted on Azure.
 
@@ -464,7 +619,7 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes early so that every new feature is visible in it at once. The MVP still covers phases 1 to 4; the dashboard is built earlier but is not part of the MVP. Each task is one branch, with a plan approved first.
 
-**Next step:** phase 2, notifications, on the branch `feat/discord-notifications`.
+**Next step:** the owner runs the manual test of phase 2 against an own Discord channel, then reviews and merges `feat/discord-notifications`. After that comes phase 5, the dashboard, with a plan approved first.
 
 ### Phase 1: Stable foundation
 
@@ -479,10 +634,12 @@ The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes ea
 
 ### Phase 2: Notifications
 
-- Notify on a status change, UP to DOWN and DOWN to UP, never on every check.
+Built on `feat/discord-notifications`, and waiting for the owner's manual run:
+
+- Notify on a status change, UP to DOWN and DOWN to UP, never on every check. See "Notification rules".
 - First channel: a Discord webhook, behind an `INotifier` interface in Application, so that more channels can be added without touching the core logic.
 - The webhook URL is a secret. It belongs in user secrets or environment variables, never in `appsettings.json` or git.
-- Tests use a fake notifier and make no real calls.
+- Tests use a fake notifier or a stub handler and make no real calls.
 
 ### Phase 5: Dashboard
 
@@ -516,7 +673,7 @@ The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes ea
 
 | Phase | Question | Current thinking |
 |---|---|---|
-| 2 | Notifications are planned for UP to DOWN and DOWN to UP. A service going from UP to UNKNOWN can mean that its name now points to a private address, which is worth knowing | Not decided. Decide in phase 2 |
+| 3 | A service going to UNKNOWN can mean that its name now points to a private address. Phase 2 decided on a warning in the log and no message, because nothing was learned about the service | Consider a notification of its own in phase 3 |
 | 3 | 3xx counts as UP and is not followed, so `http://example.com` answering 301 gives only the redirect's headers and no certificate. That would produce a misleading grade and false alarms | Grade only a real HTTPS response; anything else is "cannot be assessed". Decide in phase 3 |
 | 3 | Save the redirect target (`Location`) and warn when it suddenly points to another domain, because that can mean the site has been hijacked. The value comes from the monitored server and can contain internal addresses, so how it is stored and shown must be decided | Not decided and not built. Starting point: never follow the value, compare only the host, show it as plain text and never as a link, and hide a target that is not a public address. Legitimate moves, such as a new login domain or CDN, can cause false alarms |
 | 3 | A certificate is only visible during the TLS handshake, and a reused connection does no new handshake. "On each check" therefore does not work with pooled connections | Either turn off pooling for the probe, which also rechecks the address on every check, or use the most recently seen certificate. The cost of the first option has not been measured |
