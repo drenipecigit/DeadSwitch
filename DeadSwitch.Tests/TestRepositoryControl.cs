@@ -17,6 +17,9 @@ internal sealed class TestRepositoryControl
     // When set, GetAllAsync throws this one, so a test can choose the type and the text.
     public volatile Exception? ExceptionFromGetAll;
 
+    // When true, SaveCheckAsync throws, so a test can see what happens when a check cannot be saved.
+    public volatile bool FailSaveCheck;
+
     public void RememberLockCount(int lockCount)
     {
         lock (_sync)

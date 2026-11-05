@@ -7,8 +7,10 @@ using DeadSwitch.Application.Interfaces;
 using DeadSwitch.Application.Services;
 using DeadSwitch.Infrastructure.Data;
 using DeadSwitch.Infrastructure.Monitoring;
+using DeadSwitch.Infrastructure.Notifications;
 using DeadSwitch.Infrastructure.Repositories;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
@@ -66,6 +68,24 @@ builder.Services.AddHttpClient<IHealthProbe, HttpHealthProbe>(client =>
     // Removes HttpClient's automatic logging, which writes every URL to the log on every check.
     .RemoveAllLoggers();
 
+// The address is checked at startup, so a wrong one stops the application here and not at the first
+// alarm. The text shown is fixed and never holds the address.
+builder.Services.AddOptions<DiscordOptions>()
+    .BindConfiguration("Discord")
+    .Validate(DiscordOptions.HasValidWebhookUrl, DiscordOptions.InvalidWebhookUrlMessage)
+    .ValidateOnStart();
+
+builder.Services.AddHttpClient<INotifier, DiscordNotifier>(client =>
+{
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("DeadSwitch/1.0");
+})
+    // The same protected handler as the probe, so there is no new way out of the application:
+    // no redirects can move the message, no proxy sees it, and private addresses stay blocked.
+    .ConfigurePrimaryHttpMessageHandler(() => ProtectedHttpHandler.Create())
+    // Security-critical: HttpClient's automatic logging writes the whole address, and the token in it
+    // is all anyone needs to post to the channel.
+    .RemoveAllLoggers();
+
 builder.Services.AddOptions<MonitoringOptions>()
     .BindConfiguration("Monitoring")
     .Validate(MonitoringOptions.HasValidPollInterval, "PollIntervalSeconds must be between 1 and 3600.")
@@ -76,6 +96,16 @@ builder.Services.AddOptions<MonitoringOptions>()
 builder.Services.AddHostedService<MonitoringWorker>();
 
 WebApplication app = builder.Build();
+
+DiscordOptions discordOptions = app.Services.GetRequiredService<IOptions<DiscordOptions>>().Value;
+if (string.IsNullOrEmpty(discordOptions.WebhookUrl))
+{
+    app.Logger.LogInformation(DiscordOptions.NotificationsOffMessage);
+}
+else
+{
+    app.Logger.LogInformation(DiscordOptions.NotificationsOnMessage);
+}
 
 // Turns unexpected exceptions into a 500 response in the Problem Details format.
 app.UseExceptionHandler();

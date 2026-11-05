@@ -5,6 +5,7 @@ using DeadSwitch.Application.Interfaces;
 using DeadSwitch.Application.Services;
 using DeadSwitch.Domain;
 using DeadSwitch.Infrastructure.Notifications;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace DeadSwitch.Tests;
@@ -265,7 +266,7 @@ public class DiscordNotifierTests
     {
         DiscordOptions options = new DiscordOptions();
         options.WebhookUrl = webhookUrl;
-        return new DiscordNotifier(new HttpClient(stub), Options.Create(options));
+        return new DiscordNotifier(new HttpClient(stub), Options.Create(options), NullLogger<DiscordNotifier>.Instance);
     }
 
     private static StatusChange CreateChange(string name, string url)

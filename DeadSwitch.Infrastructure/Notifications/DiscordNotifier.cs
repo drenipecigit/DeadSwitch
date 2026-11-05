@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using DeadSwitch.Application.Interfaces;
 using DeadSwitch.Application.Services;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace DeadSwitch.Infrastructure.Notifications;
@@ -12,15 +13,17 @@ public sealed class DiscordNotifier : INotifier
 
     private readonly HttpClient _client;
     private readonly IOptions<DiscordOptions> _options;
+    private readonly ILogger<DiscordNotifier> _logger;
 
     // Short, because the worker checks services one at a time and waits for this.
     // Internal so that a test can shorten it without really waiting five seconds.
     internal TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(5);
 
-    public DiscordNotifier(HttpClient client, IOptions<DiscordOptions> options)
+    public DiscordNotifier(HttpClient client, IOptions<DiscordOptions> options, ILogger<DiscordNotifier> logger)
     {
         _client = client;
         _options = options;
+        _logger = logger;
     }
 
     public async Task NotifyStatusChangedAsync(StatusChange change)
@@ -51,6 +54,9 @@ public sealed class DiscordNotifier : INotifier
 
             if (response.IsSuccessStatusCode)
             {
+                // Logged here and not by the caller, because only this class knows that a message was
+                // really sent: without an address it returns above without sending anything.
+                _logger.LogInformation("Discord notification sent for service {ServiceId}.", change.ServiceId);
                 return;
             }
 

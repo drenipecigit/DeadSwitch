@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -34,6 +35,16 @@ internal sealed class TestApp : WebApplicationFactory<Program>
 
     public TestRepositoryControl RepositoryControl { get; } = new TestRepositoryControl();
 
+    public TestNotifier Notifier { get; } = new TestNotifier();
+
+    public CapturedLogs Logs { get; } = new CapturedLogs();
+
+    // The address the application reads. It is empty unless a test asks for the real notifier.
+    private readonly string _webhookUrl = "";
+
+    // Only set when a test wants the real notifier. It then answers instead of Discord.
+    private readonly StubDiscordHandler? _discordStub;
+
     public TestApp() : this("Development")
     {
     }
@@ -49,12 +60,23 @@ internal sealed class TestApp : WebApplicationFactory<Program>
         _keeper.Open();
     }
 
+    // Runs the real notifier through the real registration in Program.cs, against a stub. No request
+    // can leave the machine, as long as AssertDiscordClientUsesTheStub passes.
+    public TestApp(string environmentName, string webhookUrl, StubDiscordHandler discordStub) : this(environmentName)
+    {
+        _webhookUrl = webhookUrl;
+        _discordStub = discordStub;
+    }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment(_environmentName);
 
         // The tests run worker passes by hand, so the background loop must not run at the same time.
         builder.UseSetting("Monitoring:Enabled", "false");
+
+        builder.ConfigureAppConfiguration(AddTestSettings);
+        builder.ConfigureLogging(AddCapturedLogs);
 
         builder.ConfigureServices(services =>
         {
@@ -71,7 +93,58 @@ internal sealed class TestApp : WebApplicationFactory<Program>
 
             services.RemoveAll<TimeProvider>();
             services.AddSingleton<TimeProvider>(Clock);
+
+            if (_discordStub == null)
+            {
+                services.RemoveAll<INotifier>();
+                services.AddSingleton<INotifier>(Notifier);
+            }
+            else
+            {
+                services.AddHttpClient(nameof(INotifier)).ConfigurePrimaryHttpMessageHandler(CreateDiscordStub);
+            }
         });
+    }
+
+    // Development reads user secrets, so the tests would otherwise see the owner's real webhook address.
+    // This source is added last and therefore wins over user secrets and environment variables.
+    private void AddTestSettings(WebHostBuilderContext context, IConfigurationBuilder configuration)
+    {
+        Dictionary<string, string?> settings = new Dictionary<string, string?>();
+        settings["Discord:WebhookUrl"] = _webhookUrl;
+
+        // With the real notifier everything is logged, so a test can show what the log never holds.
+        if (_discordStub != null)
+        {
+            settings["Logging:LogLevel:Default"] = "Trace";
+            settings["Logging:LogLevel:Microsoft.AspNetCore"] = "Trace";
+        }
+
+        configuration.AddInMemoryCollection(settings);
+    }
+
+    private void AddCapturedLogs(ILoggingBuilder logging)
+    {
+        logging.AddProvider(Logs);
+    }
+
+    private HttpMessageHandler CreateDiscordStub()
+    {
+        return _discordStub!;
+    }
+
+    // A wrong client name would leave the real handler in place, and the next send would really go
+    // out. Every test that sends through the real notifier therefore calls this first.
+    public void AssertDiscordClientUsesTheStub()
+    {
+        IHttpMessageHandlerFactory factory = Services.GetRequiredService<IHttpMessageHandlerFactory>();
+        HttpMessageHandler current = factory.CreateHandler(nameof(INotifier));
+        while (current is DelegatingHandler wrapper)
+        {
+            current = wrapper.InnerHandler!;
+        }
+
+        Assert.Same(_discordStub, current);
     }
 
     public async Task MigrateAsync()

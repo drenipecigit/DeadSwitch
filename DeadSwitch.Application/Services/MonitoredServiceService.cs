@@ -1,5 +1,6 @@
 using DeadSwitch.Application.Interfaces;
 using DeadSwitch.Domain;
+using Microsoft.Extensions.Logging;
 
 namespace DeadSwitch.Application.Services;
 
@@ -15,16 +16,23 @@ public class MonitoredServiceService
     // TimeProvider instead of DateTime.UtcNow, so the tests can control the time.
     private readonly TimeProvider _clock;
 
+    private readonly INotifier _notifier;
+    private readonly ILogger<MonitoredServiceService> _logger;
+
     public MonitoredServiceService(
         IMonitoredServiceRepository repository,
         IHealthProbe probe,
         ServiceLocks locks,
-        TimeProvider clock)
+        TimeProvider clock,
+        INotifier notifier,
+        ILogger<MonitoredServiceService> logger)
     {
         _repository = repository;
         _probe = probe;
         _locks = locks;
         _clock = clock;
+        _notifier = notifier;
+        _logger = logger;
     }
 
     public async Task<MonitoredService> RegisterAsync(ServiceConfiguration configuration, CancellationToken ct = default)
@@ -127,6 +135,9 @@ public class MonitoredServiceService
             throw new CheckInProgressException();
         }
 
+        CheckRecord record;
+        StatusChange? statusChange = null;
+
         try
         {
             // Read again inside the lock: a manual check can have finished after the first read.
@@ -150,7 +161,7 @@ public class MonitoredServiceService
             // A cancelled check says nothing about the service, so it must not be saved.
             ct.ThrowIfCancellationRequested();
 
-            CheckRecord record = new CheckRecord();
+            record = new CheckRecord();
             record.Id = Guid.NewGuid();
             record.MonitoredServiceId = id;
             record.Url = service.Url;
@@ -159,6 +170,22 @@ public class MonitoredServiceService
             record.StatusCode = result.StatusCode;
             record.ResponseTimeMs = result.ResponseTimeMs;
             record.FailureReason = result.FailureReason;
+
+            // Must be read before CurrentStatus is overwritten below.
+            bool becameUnknown = result.Status == ServiceStatus.Unknown && service.CurrentStatus != ServiceStatus.Unknown;
+
+            // Must be decided before LastKnownStatus is overwritten below.
+            if (StatusChangeRule.ShouldNotify(service.LastKnownStatus, result.Status))
+            {
+                statusChange = new StatusChange(
+                    id,
+                    service.Name,
+                    service.Url,
+                    service.LastKnownStatus,
+                    result.Status,
+                    checkedAt,
+                    result.FailureReason);
+            }
 
             service.CurrentStatus = record.Status;
             service.LastCheckedAt = checkedAt;
@@ -170,12 +197,47 @@ public class MonitoredServiceService
             }
 
             await _repository.SaveCheckAsync(service, record, ct);
-            return record;
+
+            // Worth seeing, because it can mean that the name now points to a private address.
+            if (becameUnknown)
+            {
+                _logger.LogWarning("Service {ServiceId} changed to UNKNOWN. No notification is sent.", id);
+            }
         }
         finally
         {
             // In finally, so the lock is released even when the check throws or is cancelled.
             _locks.Release(id);
+        }
+
+        // After the lock, so that a slow channel never makes an update wait or a manual check get 409.
+        // After the save, so that an alarm is never sent for a check that was not saved.
+        if (statusChange != null)
+        {
+            await SendNotificationAsync(statusChange);
+        }
+
+        return record;
+    }
+
+    // Catches everything on purpose: the check is already saved, so a failed notification must not
+    // turn it into an error, and it must not stop the worker. Nothing here may stop the next service.
+    private async Task SendNotificationAsync(StatusChange change)
+    {
+        try
+        {
+            await _notifier.NotifyStatusChangedAsync(change);
+        }
+        catch (NotificationFailedException exception)
+        {
+            // Safe to log: this exception only ever holds fixed texts.
+            _logger.LogWarning("Notification failed for service {ServiceId}: {Reason}", change.ServiceId, exception.Message);
+        }
+        catch (Exception exception)
+        {
+            // Security: only the type is logged. The exception itself is not passed to the logger,
+            // because its text could hold the secret address of the channel.
+            _logger.LogError("Notification failed for service {ServiceId} with {ExceptionType}.", change.ServiceId, exception.GetType().Name);
         }
     }
 

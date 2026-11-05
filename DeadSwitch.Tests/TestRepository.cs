@@ -61,6 +61,11 @@ internal sealed class TestRepository : IMonitoredServiceRepository
 
     public Task SaveCheckAsync(MonitoredService service, CheckRecord record, CancellationToken ct = default)
     {
+        if (_control.FailSaveCheck)
+        {
+            throw new InvalidOperationException("The test made the repository fail.");
+        }
+
         return _real.SaveCheckAsync(service, record, ct);
     }
 
