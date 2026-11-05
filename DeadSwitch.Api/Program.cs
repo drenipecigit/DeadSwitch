@@ -121,6 +121,9 @@ StaticFileOptions dashboardFiles = new StaticFileOptions();
 dashboardFiles.OnPrepareResponse = RequireCheckBeforeReuse;
 app.UseStaticFiles(dashboardFiles);
 
+// After the files on purpose: they hold no data and change nothing, and a link to the page must work.
+app.Use(CrossSiteRequests.BlockAsync);
+
 const string UnreadableRequestTitle = "Invalid request";
 const string UnreadableRequestDetail = "The request could not be read.";
 

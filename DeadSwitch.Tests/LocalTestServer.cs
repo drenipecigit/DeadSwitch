@@ -24,6 +24,11 @@ internal sealed class LocalTestServer : IAsyncDisposable
     {
         WebApplicationBuilder builder = WebApplication.CreateBuilder();
         builder.Logging.ClearProviders();
+
+        // The API's appsettings.json is copied to the test folder and would be read here as well.
+        // This server plays a monitored website, so it has to answer to any name a test gives it.
+        builder.Configuration["AllowedHosts"] = "*";
+
         // Port 0 lets the operating system pick a free port, so tests never collide.
         builder.WebHost.UseUrls("http://127.0.0.1:0");
 
