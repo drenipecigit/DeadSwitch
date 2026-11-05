@@ -58,6 +58,20 @@ A `404` has an empty body.
 |---|---|---|
 | `Discord:WebhookUrl` | `Discord__WebhookUrl` | The Discord webhook address. A secret: set it with `dotnet user-secrets` in Development, or as an environment variable elsewhere. Never in `appsettings.json` or git. Empty or missing turns notifications off |
 
+**Setting the secret in Windows PowerShell 5.1.** `Read-Host` does not work inside a pasted block, because the next pasted line becomes its answer. The method that worked was to copy the webhook address and run one line that reads the clipboard, writes `secrets.json` as UTF-8 without a BOM and then empties the clipboard. The address never appears in the command, so it stays out of the PowerShell history. The folder name is the `UserSecretsId` in `DeadSwitch.Api.csproj`. The line replaces the file, so any other secret in it is lost. The two lines below are written from that method and have not been run in exactly this form.
+
+```powershell
+$u = (Get-Clipboard).Trim(); $dir = "$env:APPDATA\Microsoft\UserSecrets\5b81803a-e9fc-45d0-8fd9-6caba300b0b2"; New-Item -ItemType Directory -Force -Path $dir | Out-Null; [IO.File]::WriteAllText("$dir\secrets.json", (@{ "Discord:WebhookUrl" = $u } | ConvertTo-Json), (New-Object Text.UTF8Encoding($false))); Set-Clipboard -Value " "; Remove-Variable u
+```
+
+To check the result, show only the length and whether the address starts correctly. Never print the value, and do not run `dotnet user-secrets list` without hiding it.
+
+```powershell
+$v = (Get-Content "$env:APPDATA\Microsoft\UserSecrets\5b81803a-e9fc-45d0-8fd9-6caba300b0b2\secrets.json" -Raw | ConvertFrom-Json)."Discord:WebhookUrl"; "Length: $($v.Length)"; "Starts correctly: $($v.StartsWith('https://discord.com/api/webhooks/'))"; Remove-Variable v
+```
+
+Emptying the clipboard does not reach the Windows clipboard history, if that is turned on: the address stays there until it is removed by hand.
+
 ## Migrations
 
 | Migration | Change |
@@ -84,7 +98,7 @@ Date: 2026-11-05.
 - 470 of the tests come from phase 1: 162 only classify URLs and IP addresses, 17 run the real connection code against a local server, 16 test the probe with a stub handler, 11 run the real probe and handler with a fake DNS, 7 test `ServiceLocks` directly, 134 test unusual host names through the API, the worker and the real probe with a fake probe or a fake DNS, and 123 use the API, the worker or the migrations with a fake probe and an in-memory database.
 - 153 come from phase 2: 60 classify webhook addresses, 12 test the rule directly, 29 test the real notifier with a stub handler, 2 test the registered handler against a local server, 13 run the real registration with a stub handler, 36 use the API, the worker or the migrations with a fake notifier, and 1 reads the settings files.
 - Without the 68 tests that carry the trait `NameLookupWithoutConnector`: 555 passed.
-- No test sends anything to Discord. A real message has not been sent yet; see "Waiting for a manual run".
+- No test sends anything to Discord. Real messages are confirmed by the owner's run; see "Manual run".
 
 ### Red runs of the notifications
 
@@ -412,17 +426,26 @@ Done by the owner on 2026-11-05, against the real server (Kestrel) in Windows Po
 
 Run against the real server (Kestrel) on 2026-11-05 with its own database file and no checks, so that nothing left the machine: with no webhook address the startup line says that notifications are off, and an invalid address in `Discord__WebhookUrl` stops the application with the fixed text and without showing the address. The `POST` and `PUT` commands for the manual run were tried in Windows PowerShell 5.1.
 
-### Waiting for a manual run
+Done by the owner on 2026-11-05 against a real Discord channel, on the real server (Kestrel) in Windows PowerShell 5.1, with its own database file and the worker turned off. The service was named `@everyone @here test <@1> [click](https://example.com)` and had the URL `https://httpbin.org/delay/3?secret=abc`.
 
-The owner runs these against an own Discord channel. Until then, phase 2 is not done.
+- The startup line said `Discord notifications are turned on.`
+- The first check was UP: no message.
+- `timeoutSeconds` 1 gave DOWN (`Check timed out`): exactly one message, `is DOWN (was UP)`.
+- Another check was DOWN: no new message.
+- The new faulty URL `https://does-not-exist.invalid/` gave DOWN: exactly one message, `is DOWN (first check)`.
+- In Discord: no ping, `@everyone` and `@here` were shown as inline code, `[click](...)` was no link, `?secret=abc` was not shown, and the times ended with `Z`.
+- The log held `Discord notification sent` and no match for `api/webhooks`.
 
-- A real message reaches the channel: UP to DOWN, DOWN to UP, and DOWN at once for a new faulty URL. No message on a repeated status.
-- `@everyone`, `@here` and a mention in a name give no ping, and a link in a name is shown as text.
-- A query in the URL is not shown in the message.
-- `/api/webhooks/` on `discord.com` is the right path. The documentation only shows `/webhooks/{id}/{token}`, without a host.
+This also confirms that a real address under `/api/webhooks/` on `discord.com` works, and that HTTPS through the connector reaches Discord. It is one run with one channel, and it shows that Discord obeyed the empty `parse` in these messages.
+
+### Not run manually
+
+Proven by tests only, and not confirmed against the real Discord:
+
+- The DOWN to UP message.
 - A wrong token: the check is saved and the log shows the status code.
-- The log holds no webhook address after a real send.
-- Setting the secret through standard input with `dotnet user-secrets set`.
+- Notifications turned off with an empty address, during a run with a status change. The startup line and the application starting were confirmed on the real server without any check.
+- `dotnet test` with the real secret set: no result has been recorded. The override in `TestApp` is proven with an environment variable, which has a higher priority than user secrets.
 
 ### Never run so far
 
@@ -491,9 +514,9 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | History endpoint | Done | Proven by tests, with `Z` on every time, and confirmed by a manual run after a real check |
 | SSRF protection | Done for HTTP | Proven by tests against a local server. HTTPS through the connector is untested; see the security notes |
 | Tests for all of the above | Done for phase 1 | The limits are listed under "Not proven by a test" and "Never run so far" |
-| Notification on UP to DOWN and DOWN to UP | Partial | Proven by tests with a fake notifier and a stub. No real message has been sent; see "Waiting for a manual run" |
-| `INotifier` with a Discord webhook | Partial | The same |
-| Webhook address outside git | Done | Proven by tests of the settings files and the log. Setting the secret is part of the manual run |
+| Notification on UP to DOWN and DOWN to UP | Done | Both directions are proven by tests with a fake notifier and a stub. A manual run confirms real messages for UP to DOWN and for DOWN on a new URL. DOWN to UP has not been run manually |
+| `INotifier` with a Discord webhook | Done | Proven by tests, and confirmed by a manual run against a real channel. A wrong token from Discord and notifications turned off have not been run manually with a real send |
+| Webhook address outside git | Done | Proven by tests of the settings files and the log. A manual run confirms the secret is read, and that the log holds no address after a real send |
 | README | Missing | |
 | GitHub Actions | Missing | Waits for the owner's approval |
 
@@ -608,7 +631,7 @@ Checked against Discord's documentation, on the webhook and message pages only:
 - `allowed_mentions` is a parameter of Execute Webhook, and `{"parse": []}` is the documented way to suppress all mentions. The example shows a normal message.
 - The answer is a message or 204 depending on `wait`. It defaults to false, and then "a message that is not saved does not return an error". That is why `wait=true` is sent.
 - The `/slack` and `/github` variants exist, which is why the address rule rejects them.
-- The pages say nothing about `/api/` in the path or about rate limits.
+- The pages say nothing about `/api/` in the path or about rate limits. The manual run confirms that a real address under `/api/webhooks/` on `discord.com` works. Rate limits remain unread and untested.
 
 Untested assumption:
 - `168.63.129.16` (an Azure platform address) counts as public. This matters if the API is hosted on Azure.
@@ -619,7 +642,7 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes early so that every new feature is visible in it at once. The MVP still covers phases 1 to 4; the dashboard is built earlier but is not part of the MVP. Each task is one branch, with a plan approved first.
 
-**Next step:** the owner runs the manual test of phase 2 against an own Discord channel, then reviews and merges `feat/discord-notifications`. After that comes phase 5, the dashboard, with a plan approved first.
+**Next step:** the owner reviews and merges `feat/discord-notifications`. After that comes phase 5, the dashboard, with a plan approved first.
 
 ### Phase 1: Stable foundation
 
@@ -634,7 +657,7 @@ The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes ea
 
 ### Phase 2: Notifications
 
-Built on `feat/discord-notifications`, and waiting for the owner's manual run:
+Built on `feat/discord-notifications` and confirmed by the owner's manual run, except for the parts listed under "Not run manually":
 
 - Notify on a status change, UP to DOWN and DOWN to UP, never on every check. See "Notification rules".
 - First channel: a Discord webhook, behind an `INotifier` interface in Application, so that more channels can be added without touching the core logic.
