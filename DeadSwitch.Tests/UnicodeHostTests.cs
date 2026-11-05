@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using DeadSwitch.Api.Monitoring;
 using DeadSwitch.Application.Interfaces;
 using DeadSwitch.Application.Services;
 using DeadSwitch.Domain;
@@ -119,7 +120,7 @@ public class UnicodeHostTests
         }
 
         app.Probe.Check = CheckWithRealProbe;
-        var worker = app.CreateWorker();
+        MonitoringWorker worker = app.CreateWorker();
 
         await worker.RunPassAsync(CancellationToken.None);
         await worker.RunPassAsync(CancellationToken.None);

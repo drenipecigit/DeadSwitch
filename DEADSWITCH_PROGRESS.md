@@ -1,6 +1,6 @@
 # DeadSwitch progress
 
-Updated: 2026-11-04.
+Updated: 2026-11-05.
 
 DeadSwitch is a personal uptime monitor. The backend is **not finished**: see the MVP status below.
 
@@ -11,9 +11,9 @@ DeadSwitch is a personal uptime monitor. The backend is **not finished**: see th
 | Project | Contains | References |
 |---|---|---|
 | `DeadSwitch.Domain` | `MonitoredService`, `CheckRecord`, `ServiceStatus` | nothing |
-| `DeadSwitch.Application` | `MonitoredServiceService`, `ServiceConfiguration`, `UrlSafety`, `ServiceLocks`, interfaces | Domain |
+| `DeadSwitch.Application` | `MonitoredServiceService`, `ServiceConfiguration`, `UrlSafety`, `ServiceLocks`, `ServiceValidationException`, `CheckInProgressException`, interfaces | Domain |
 | `DeadSwitch.Infrastructure` | `DeadSwitchDbContext`, repository, `HttpHealthProbe`, `ProtectedHttpHandler`, `PublicInternetConnector`, `DestinationBlockedException`, migrations | Application, Domain |
-| `DeadSwitch.Api` | Startup in `Program.cs`, `ServiceEndpoints`, `MonitoringWorker` | Application, Domain, Infrastructure |
+| `DeadSwitch.Api` | Startup in `Program.cs`, `ServiceEndpoints`, `RegisterServiceRequest`, `UpdateServiceRequest`, `UtcDateTimeOffsetConverter`, `MonitoringWorker` | Application, Domain, Infrastructure |
 | `DeadSwitch.Tests` | Automated tests | Api, and the other projects through it |
 
 ## Endpoints
@@ -24,12 +24,31 @@ DeadSwitch is a personal uptime monitor. The backend is **not finished**: see th
 | `POST /services` | Register a service |
 | `GET /services` | List services |
 | `GET /services/{id}` | Get one service |
-| `PUT /services/{id}` | Update a service |
+| `PUT /services/{id}` | Replace a service's configuration; every field is required |
 | `DELETE /services/{id}` | Delete a service and its history |
 | `POST /services/{id}/check` | Manual check, saved to the history |
 | `GET /services/{id}/history?skip=&take=` | Check history, newest first; `take` is 1 to 200 |
 | `GET /check?url=` | Check a public URL without saving anything |
 | `GET /services/{id}/check` | Older compatibility route; also saves to the history |
+
+## API contract
+
+**Times.** Every time in the API is UTC and ends with `Z`, for example `2026-11-03T12:00:00Z`. Parts of a second are written only when they exist. `checkedAtUtc` and `lastCheckedAt` mean when the check started. `lastCheckedAt` used to end with `+00:00`; the moment it describes is the same.
+
+**`POST` and `PUT`.** `POST /services` requires `name` and `url`, and defaults to `intervalSeconds` 60, `timeoutSeconds` 10 and `isEnabled` true. `PUT /services/{id}` replaces the whole configuration, so all five fields are required. A missing or null field gives 400 and changes nothing. A default value on `PUT` could silently enable a paused service, or reset its interval.
+
+**Errors.** Every error below uses the Problem Details format, with fixed texts only.
+
+| Case | Status | `title` | `detail` |
+|---|---|---|---|
+| Rejected configuration or URL | 400 | `Invalid configuration` | A specific fixed text, never containing the input |
+| JSON or a parameter that cannot be read | 400 | `Invalid request` | `The request could not be read.` |
+| Wrong content type | 415 | `Invalid request` | `The request could not be read.` |
+| A `BadHttpRequestException` with another status code | That code | `Invalid request` | `The request could not be read.` |
+| A check or change already in progress | 409 | `Check in progress` | A fixed text |
+| Any unexpected exception | 500 | The framework's general title | None |
+
+A `404` has an empty body.
 
 ## Migrations
 
@@ -45,13 +64,90 @@ The application does not run migrations at startup. Run `dotnet ef database upda
 
 Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, so old rows did not need rewriting.
 
+`fix/api-contract` needed no migration. Marking a time read from the database as UTC does not change the column or the saved text. This is proven by `ModelMatchesTheMigrations`, by `dotnet ef migrations has-pending-model-changes`, by no change in the `Migrations` folder, and by tests that read the saved text directly.
+
 ## Latest verified result
 
-Date: 2026-11-04.
+Date: 2026-11-05.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
-- `dotnet test DeadSwitch.slnx`: 228 passed, 0 failed, five runs in a row.
-- Of the 228 tests, 130 only classify URLs and IP addresses, 17 run the real connection code against a local server, 16 test the probe with a stub handler, 7 test `ServiceLocks` directly, and 58 use the API, the worker or the migrations with a fake probe and an in-memory database.
+- `dotnet test DeadSwitch.slnx`: 470 passed, 0 failed, five runs in a row.
+- Of the 470 tests, 162 only classify URLs and IP addresses, 17 run the real connection code against a local server, 16 test the probe with a stub handler, 11 run the real probe and handler with a fake DNS, 7 test `ServiceLocks` directly, 134 test unusual host names through the API, the worker and the real probe with a fake probe or a fake DNS, and 123 use the API, the worker or the migrations with a fake probe and an in-memory database.
+- Without the 68 tests that carry the trait `NameLookupWithoutConnector`: 402 passed.
+
+### Red runs of the API contract
+
+Each test was run against the old code before the fix.
+
+| Test | Old result | Expected |
+|---|---|---|
+| History time, read as raw JSON (3 tests) | `2026-11-03T12:00:00`, no `Z` | With `Z` |
+| `lastCheckedAt` on every route and from saved rows (4 cases) | `+00:00` | `Z` |
+| 26 unusual URLs on `/check`, `POST`, `PUT`, `UrlSafety`, the real probe and the worker (156 cases) | Accepted, and 6 of them made the real probe throw | 400, or UNKNOWN from the probe |
+| `ArgumentException` holding a secret text | 400 showing the text | 500 without it |
+| Unreadable JSON and parameters, Development | 500 | Fixed 400 |
+| Unreadable JSON and parameters, Production | 400 with an empty body | Fixed 400 |
+| Wrong content type, both environments | 415 with an empty body | Fixed 415 |
+| `PUT` without `isEnabled`, `intervalSeconds` or `timeoutSeconds`, or with a misspelled `isEnabled` | 200, and the service changed | 400, nothing changed |
+| `PUT` without `name` or `url`, or with `isEnabled` null | 400 with another text | 400 with the exact text |
+
+Some tests could not be red, because the behaviour was already right: `PUT` to a forbidden URL, 500 without text for an `InvalidOperationException`, the exact validation texts, explicit `true` and `false` on `PUT`, the default values on `POST` and the saved text in the database. These are proven by the mutations below.
+
+### Mutation check of the API contract
+
+The code was broken on purpose, one change at a time, running all tests and restoring the file from a backup. The changes were never committed. All of them ran against the fake probe, the stub or a fake DNS, and none of them touched `PublicInternetConnector`, `ProtectedHttpHandler` or `ConnectCallback`. Two small changes to the tests came after the run: escape codes for invisible characters, and one explicit type. Neither changes what is tested.
+
+| Change | Failing tests |
+|---|---|
+| `SpecifyKind` removed | 4 |
+| `SpecifyKind` with `Unspecified` | 4 |
+| Time converter not registered | 4 |
+| Converter writes the value as it is | 4 |
+| Converter writes `value.DateTime` | 5 |
+| Converter marks a local time as UTC, which gives the wrong moment | 1 |
+| The time is read after the probe | 3 |
+| The time is saved with `ToLocalTime` | 5 |
+| No `catch (ServiceValidationException)` | 112 |
+| `catch (ArgumentException)` back, showing its message | 1 |
+| The validation `detail` is another text | 16 |
+| The first URL message contains the URL | 3 |
+| The second URL message contains the URL | 3 |
+| Name check removed | 4 |
+| Interval check removed | 2 |
+| Timeout check removed | 2 |
+| `Validate` removed in `UpdateAsync` | 36 |
+| `Validate` removed in `RegisterAsync` | 40 |
+| `UrlSafety` removed from `ServiceConfiguration` | 68 |
+| `UrlSafety` removed from `/check` | 28 |
+| The probe does not catch `ServiceValidationException` | 54 |
+| No `catch (BadHttpRequestException)` | 18 |
+| `detail` is `ex.Message` | 18 |
+| `detail` is the inner exception's message | 18 |
+| `detail` is `ex.ToString()` | 18 |
+| The status is always 400 | 2 |
+| `ThrowOnBadRequest` removed | 8, all in Production |
+| `ThrowOnBadRequest` set to false | 16 |
+| `UseExceptionHandler` removed | 3 |
+| The 500 answer gets the exception's text | 3 |
+| A 415 does not get the fixed answer | 2 |
+| `IsEnabled` falls back to true on `PUT` | 4 |
+| `IsEnabled` falls back to false on `PUT` | 4 |
+| `IntervalSeconds` falls back to 60 on `PUT` | 1 |
+| `TimeoutSeconds` falls back to 10 on `PUT` | 1 |
+| The `Name` check on `PUT` removed | 1 |
+| The `Url` check on `PUT` removed | 1 |
+| `PUT` uses `RegisterServiceRequest` | 8 |
+| `POST` uses `UpdateServiceRequest` | 3 |
+| `Apply` does not write `IsEnabled` | 3 |
+| The probe does not catch `HttpRequestException` | 15 |
+| `catch (ArgumentException)` back in the probe | 0; see below |
+| `DnsSafeHost` instead of `IdnHost` | 156 |
+| `UriFormatException` not caught | 36 |
+| A host that cannot be converted is not rejected | 36 |
+| The IP check is decided from `HostNameType` | 85 |
+| No handling of a trailing dot | 21 |
+
+The row with 0 failing tests: nothing that was found can throw an `ArgumentException` that reaches this catch, because the framework wraps failures from the connection step in `HttpRequestException`. The catch is therefore not needed, and its absence cannot be observed. This does not prove that no other case exists.
 
 ### Red runs of the check interval
 
@@ -210,15 +306,19 @@ Done by the owner against a newly created database:
 - CRUD works.
 - A manual check against `example.com` works.
 - Registering `127.0.0.1` returns 400. This proves the URL validation, not the check of resolved addresses at connection time.
-- A confirmed bug: see the history row in the MVP status.
+- A bug in the history's time format, fixed since then in `fix/api-contract`.
 
 Done by the owner on 2026-11-04:
 
 - `GET /check?url=http://github.com` returned UP with status code 301. This is a redirect from a real website through the whole chain, and the status code shows that the redirect was not followed.
 - The background worker against a real database, with its own database file: `intervalSeconds` = 10 against `https://github.com` with a poll of 1 second. 16 gaps between checks: minimum 9.975 s, maximum 10.001 s, mean 9.9985 s, all UP with status code 200. A check with a response time of 104 ms still gave a gap of 10.001 s. This is one run with one interval and one poll.
 
+Run against the real server (Kestrel) on 2026-11-05, in Windows PowerShell 5.1 against `localhost` in Development, with its own database file and the worker turned off. Only routes that send no traffic out were used: malformed JSON and `GET /check` without a URL gave the fixed 400, a wrong content type gave the fixed 415, `PUT` without `isEnabled` gave 400 and the service stayed paused, and unusual host names on `POST`, `PUT` and `GET /check` gave 400.
+
 ### Never run so far
 
+- `GET /services/{id}/history` after a real check on the real server, which is what would show the `Z` outside the tests.
+- The API on the real server in Production.
 - A hostname on the real network that resolves to a private address. Tests cover this with `localhost` and a fake DNS.
 - The compatibility route against the real network.
 
@@ -254,6 +354,13 @@ The automated tests still cover a redirect in two separate parts, because `UrlSa
 - DNS rebinding: every new connection looks up and checks the address again, and connects to the checked address without a second lookup.
 - The next address is tried when the first does not answer.
 - The exact JSON field names of `/health`, `/check` and `GET /services/{id}/check`.
+- Every time in the API is written in UTC with `Z` on every route, and is the start of the check. Old rows get `Z`, are sorted correctly together with new ones, and keep their saved text.
+- `PUT` requires all five fields; a missing, null or misspelled field gives 400 and changes nothing. Explicit values work, and `POST` keeps its default values.
+- `PUT` to a forbidden URL gives 400 and changes nothing, also when the service does not exist.
+- Unusual host names, such as fullwidth forms and other dot characters, give 400 on `GET /check`, `POST` and `PUT`. The real probe gives UNKNOWN before any name lookup, and the worker saves UNKNOWN and then waits for the interval.
+- Failures from the DNS step, including `ArgumentException`, give DOWN through the real handler.
+- Unreadable JSON and parameters give a fixed 400, and a wrong content type a fixed 415, in both Development and Production on the test server.
+- Validation errors have exact fixed texts and never repeat the URL. A 500 shows nothing from the exception. No error answer contains a stack trace, a class name, a path or a JSON position, as far as a list of forbidden texts can show.
 
 Dependency injection lifetimes were reviewed by reading the code only.
 
@@ -261,14 +368,14 @@ Dependency injection lifetimes were reviewed by reading the code only.
 
 | Item | Status | What remains |
 |---|---|---|
-| CRUD and validation | Partial | `PUT` without `isEnabled` enables a paused service. Malformed JSON is untested |
+| CRUD and validation | Done | Proven by tests. `POST` ignores unknown fields; see the known limitations |
 | Manual check and history | Done | |
 | Background worker | Done | Loop, error isolation, shutdown and interval are proven with a fake clock, and one manual run against a real database confirms interval 10 with a poll of 1 second. Intervals 12 and 17 are proven with the fake clock only |
 | No overlapping checks | Partial | Protects a single process only; see the lock limitation below |
 | Status UP / DOWN / UNKNOWN | Done | Proven by tests. A 3xx from a real website is confirmed by a manual run |
-| History endpoint | **Bug, confirmed** | `POST /services/{id}/check` returns `checkedAtUtc` with `Z`, but `GET /services/{id}/history` returns the same time without `Z`. A client can read it as local time. Not fixed yet |
+| History endpoint | Done | Proven by tests, with `Z` on every time. A manual run after a real check is still open |
 | SSRF protection | Done for HTTP | Proven by tests against a local server. HTTPS through the connector is untested; see the security notes |
-| Tests for all of the above | Partial | See the gaps above |
+| Tests for all of the above | Done for phase 1 | The limits are listed under "Not proven by a test" and "Never run so far" |
 | README | Missing | |
 | GitHub Actions | Missing | Waits for the owner's approval |
 
@@ -297,6 +404,12 @@ Check records saved before this rule keep their old status: an earlier 3xx stays
 - History is never cleaned up and grows without limit.
 - `SocketsHttpHandler.ConnectTimeout` is 10 seconds, even when `TimeoutSeconds` is higher. One address that never answers can use all of it before the next address is tried.
 - A host name longer than 255 characters passes `UrlSafety` and only fails at the DNS step, which gives DOWN. It should be rejected earlier.
+- `POST` ignores fields it does not know, so a misspelled `"isEnable": false` gives an enabled service. `PUT` catches this, because the real field is then missing.
+- If an unexpected kind of exception ever gets out of the probe, a manual check gives 500 and the worker logs the error and tries again on every pass, because the service stays due. None is known now.
+- `TimeoutSeconds` edited by hand to a value the API would reject throws outside the probe's `try`, which gives 500. The API itself never saves such a value.
+- A check record saved by hand with another time zone would be read as UTC. The application has only ever written UTC.
+- Code in the framework that answers before the middleware, such as Kestrel's own HTTP errors, does not use the fixed error texts. This has not been tested.
+- How the time fields are described in the OpenAPI document with the converter in place has not been checked.
 - A value in a status column other than `UP`, `DOWN` or `UNKNOWN` makes reading that row fail. The application only writes these three, so this needs a manual edit of the database.
 
 ## Code style exceptions
@@ -307,6 +420,9 @@ These parts do not yet follow the project's plain style, on purpose:
 - `PublicInternetConnector.ConnectAsync` keeps an explicit check of an empty DNS answer, although the last line of the method would also stop one. This is defence in depth: it states the intent, and the protection must not depend on how the rest of the method is written. The tests therefore stay green if the check is removed.
 - `MonitoringWorker` keeps three `catch ... when` filters. Replacing them would duplicate the log lines.
 - The queries in the repository stay as LINQ, because EF Core translates them to SQL.
+- `UtcDateTimeOffsetConverter` is a class with an abstract `Read` method that no request uses, because `System.Text.Json` has no setting for the time format.
+- `UrlSafety.GetConnectionHost` uses `try`/`catch` and returns null. `Uri.IdnHost` has no version that avoids the exception, and a host that cannot be converted must be rejected.
+- `Program.cs` checks for 415 after the next middleware instead of catching an exception, because the framework throws nothing for a wrong content type.
 
 ## Security notes
 
@@ -333,7 +449,10 @@ Not proven by a test:
 Known problems:
 - There is no authentication or rate limiting. `GET /check` is open, and `GET /services/{id}/check` writes data. This is acceptable on localhost only and must be solved before any deployment.
 - Internal hostnames pass registration. They are stopped at connection time, after the DNS lookup has already been made.
-- The middleware in `Program.cs` catches every `ArgumentException`, so an internal error can become a 400 that shows its message.
+
+Error answers:
+- Only `ServiceValidationException` and `CheckInProgressException` show their message, and both hold fixed texts. The middleware no longer catches `ArgumentException`, so an internal error cannot become a 400 that shows its text.
+- The tests of leaks search for a list of forbidden texts. They prove exact answers for the known cases, not for every possible failure. Only the answer is tested: exception texts in the log are intended.
 
 Untested assumption:
 - `168.63.129.16` (an Azure platform address) counts as public. This matters if the API is hosted on Azure.
@@ -344,7 +463,7 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes early so that every new feature is visible in it at once. The MVP still covers phases 1 to 4; the dashboard is built earlier but is not part of the MVP. Each task is one branch, with a plan approved first.
 
-**Next step:** `fix/api-contract`.
+**Next step:** the owner reviews and merges `fix/api-contract`. After that comes phase 2, notifications, with a plan approved first.
 
 ### Phase 1: Stable foundation
 
@@ -353,9 +472,9 @@ The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes ea
 3. Done: `fix/status-enum`: add `ServiceStatus`. A timeout is DOWN and a blocked address is UNKNOWN.
 4. Done: `fix/redirect-status`: 3xx is UP, without following the redirect. Document the limitation.
 5. Done: `test/worker-loop`: test error isolation, shutdown and worker against manual check. A manual run had shown that `intervalSeconds` = 10 usually became 15 seconds. The cause is confirmed and fixed; see "Red runs of the check interval". A manual run against a real database confirms it at interval 10; see "Manual run".
-6. `fix/api-contract`: dedicated validation exception, 400 on malformed JSON, safe `PUT` defaults, and UTC timestamps with `Z` (the confirmed bug above). This task must start from the contract change below.
+6. Done: `fix/api-contract`: dedicated validation exception, 400 on malformed JSON, `PUT` that requires every field, and UTC times with `Z`. It also made `UrlSafety` judge the same name as the connection; see the security notes.
 
-**Contract change from `test/worker-loop`:** `checkedAtUtc` in the check responses and the history now means when the check **started**, not when it ended. The same applies to `lastCheckedAt` on the service and in the compatibility route. The field names and the format are unchanged. Check records saved before this change keep their end time. A record's end time is not stored, but it can be estimated by adding `responseTimeMs`.
+**Contract change from `test/worker-loop`:** `checkedAtUtc` in the check responses and the history means when the check **started**, not when it ended. The same applies to `lastCheckedAt` on the service and in the compatibility route. Check records saved before this change keep their end time. A record's end time is not stored, but it can be estimated by adding `responseTimeMs`.
 
 ### Phase 2: Notifications
 
