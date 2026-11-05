@@ -34,19 +34,19 @@ public static class UnicodeHostUrls
         "http://０１７７.０.０.１/",
 
         // A soft hyphen disappears in the conversion, and what is left is a forbidden name or address.
-        "http://local­host/",
-        "http://１２­７.０.０.１/"
+        "http://local\u00ADhost/",
+        "http://１２\u00AD７.０.０.１/"
     };
 
     // The conversion to the name the connection uses fails. These gave 500 on /check.
     public static TheoryData<string> CannotBeConverted => new TheoryData<string>
     {
-        "http://­.example.com/",
-        "http://­/",
-        "http://a‍b.example.com/",
-        "http://‍/",
-        "http://́.example.com/",
-        "https://­.example.com/"
+        "http://\u00AD.example.com/",
+        "http://\u00AD/",
+        "http://a\u200Db.example.com/",
+        "http://\u200D/",
+        "http://\u0301.example.com/",
+        "https://\u00AD.example.com/"
     };
 
     // Control: the fix must not reject every name with unusual characters.
@@ -54,7 +54,7 @@ public static class UnicodeHostUrls
     {
         "http://bücher.example/",
         "https://bücher.example/",
-        "http://a­b.example.com/",
+        "http://a\u00ADb.example.com/",
         "http://ｅｘａｍｐｌｅ.ｃｏｍ/"
     };
 }

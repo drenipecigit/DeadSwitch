@@ -68,7 +68,7 @@ public class ProbeFailureMappingTests
             "http://xn---.example.com/",
 
             // Right-to-left letters mixed with ordinary letters, and a label with odd hyphens.
-            "http://אa.example.com/",
+            "http://\u05D0a.example.com/",
             "http://-a-.example.com/"
         };
     }
