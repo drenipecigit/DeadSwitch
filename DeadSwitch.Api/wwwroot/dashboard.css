@@ -1,0 +1,158 @@
+/* The browser picks light or dark from the owner's setting. */
+:root {
+  color-scheme: light dark;
+  --background: #f6f7f9;
+  --surface: #ffffff;
+  --text: #1c2128;
+  --muted: #5b6470;
+  --line: #d8dde3;
+  --up: #116329;
+  --up-background: #dcf5e3;
+  --down: #a40e26;
+  --down-background: #ffe3e6;
+  --unknown: #5b6470;
+  --unknown-background: #e8ebef;
+  --error-background: #fff4d6;
+  --error-text: #6b4a00;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #14171b;
+    --surface: #1d2126;
+    --text: #e6e9ed;
+    --muted: #a0a8b3;
+    --line: #343a42;
+    --up: #7ee2a0;
+    --up-background: #143321;
+    --down: #ffa3ae;
+    --down-background: #451820;
+    --unknown: #c1c7cf;
+    --unknown-background: #2d3238;
+    --error-background: #40330f;
+    --error-text: #ffdf91;
+  }
+}
+
+body {
+  margin: 0;
+  padding: 24px;
+  background: var(--background);
+  color: var(--text);
+  font-family: system-ui, sans-serif;
+  font-size: 15px;
+}
+
+header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 24px;
+  margin-bottom: 16px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 22px;
+}
+
+.update-time {
+  margin: 0;
+  color: var(--muted);
+}
+
+.update-error {
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background: var(--error-background);
+  color: var(--error-text);
+  font-weight: 600;
+}
+
+.no-services {
+  margin: 0 0 16px;
+  color: var(--muted);
+}
+
+/* Only the table scrolls on a narrow screen, not the whole page. */
+.table-frame {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+th {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* A name or address can be long and without spaces, and must not stretch the table without limit. */
+.wrap-text {
+  min-width: 140px;
+  max-width: 320px;
+  overflow-wrap: anywhere;
+}
+
+.no-wrap {
+  white-space: nowrap;
+}
+
+/* The text is always there as well, so that the status never depends on seeing the colour. */
+.status {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.status-up {
+  background: var(--up-background);
+  color: var(--up);
+}
+
+.status-down {
+  background: var(--down-background);
+  color: var(--down);
+}
+
+.status-unknown {
+  background: var(--unknown-background);
+  color: var(--unknown);
+}
+
+.paused {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.stale {
+  opacity: 0.55;
+}

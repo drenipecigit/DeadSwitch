@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DeadSwitch</title>
+  <link rel="stylesheet" href="/dashboard.css">
+</head>
+<body>
+  <header>
+    <h1>DeadSwitch</h1>
+    <p id="update-time" class="update-time">Loading...</p>
+  </header>
+  <main>
+    <p id="update-error" class="update-error" role="alert" hidden></p>
+    <p id="no-services" class="no-services" hidden>No services registered yet.</p>
+    <div id="table-frame" class="table-frame">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">Name</th>
+            <th scope="col">URL</th>
+            <th scope="col">Status</th>
+            <th scope="col">Last known</th>
+            <th scope="col">Response time</th>
+            <th scope="col">Last check</th>
+            <th scope="col">Failure reason</th>
+          </tr>
+        </thead>
+        <tbody id="service-rows"></tbody>
+      </table>
+    </div>
+  </main>
+  <script src="/dashboard.js"></script>
+</body>
+</html>

@@ -3,12 +3,14 @@ using System.Text.Json.Serialization;
 using DeadSwitch.Api.Endpoints;
 using DeadSwitch.Api.Json;
 using DeadSwitch.Api.Monitoring;
+using DeadSwitch.Api.Security;
 using DeadSwitch.Application.Interfaces;
 using DeadSwitch.Application.Services;
 using DeadSwitch.Infrastructure.Data;
 using DeadSwitch.Infrastructure.Monitoring;
 using DeadSwitch.Infrastructure.Notifications;
 using DeadSwitch.Infrastructure.Repositories;
+using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -107,8 +109,17 @@ else
     app.Logger.LogInformation(DiscordOptions.NotificationsOnMessage);
 }
 
+// First, so that every answer gets the headers, also one from the exception handler below.
+app.Use(SecurityHeaders.AddAsync);
+
 // Turns unexpected exceptions into a 500 response in the Problem Details format.
 app.UseExceptionHandler();
+
+// Serves the dashboard from wwwroot: "/" becomes index.html.
+app.UseDefaultFiles();
+StaticFileOptions dashboardFiles = new StaticFileOptions();
+dashboardFiles.OnPrepareResponse = RequireCheckBeforeReuse;
+app.UseStaticFiles(dashboardFiles);
 
 const string UnreadableRequestTitle = "Invalid request";
 const string UnreadableRequestDetail = "The request could not be read.";
@@ -157,6 +168,12 @@ if (app.Environment.IsDevelopment())
 ServiceEndpoints.Map(app);
 
 app.Run();
+
+// no-cache means "ask the server first", so that a browser never keeps running an old script.
+static void RequireCheckBeforeReuse(StaticFileResponseContext file)
+{
+    file.Context.Response.Headers.CacheControl = "no-cache";
+}
 
 // The compiler generates the Program class as internal when top-level statements are used.
 // Making it public lets the test project start the API with WebApplicationFactory<Program>.
