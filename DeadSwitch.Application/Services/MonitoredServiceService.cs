@@ -67,6 +67,7 @@ public class MonitoredServiceService
             if (service.Url != configuration.Url.Trim())
             {
                 service.CurrentStatus = ServiceStatus.Unknown;
+                service.LastKnownStatus = null;
                 service.LastCheckedAt = null;
             }
 
@@ -161,6 +162,12 @@ public class MonitoredServiceService
 
             service.CurrentStatus = record.Status;
             service.LastCheckedAt = checkedAt;
+
+            // Unknown says nothing about the service, so it must not replace what is already known.
+            if (result.Status != ServiceStatus.Unknown)
+            {
+                service.LastKnownStatus = result.Status;
+            }
 
             await _repository.SaveCheckAsync(service, record, ct);
             return record;

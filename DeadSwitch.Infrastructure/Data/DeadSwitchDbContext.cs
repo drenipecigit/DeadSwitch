@@ -33,6 +33,14 @@ public class DeadSwitchDbContext(DbContextOptions<DeadSwitchDbContext> options) 
                 text => Enum.Parse<ServiceStatus>(text, ignoreCase: true))
             .HasDefaultValue(ServiceStatus.Unknown);
 
+        // The same text as CurrentStatus. EF Core never passes null to a conversion, so null stays NULL
+        // and the ! is safe.
+        modelBuilder.Entity<MonitoredService>()
+            .Property(service => service.LastKnownStatus)
+            .HasConversion(
+                status => status.ToString()!.ToUpperInvariant(),
+                text => Enum.Parse<ServiceStatus>(text, ignoreCase: true));
+
         modelBuilder.Entity<CheckRecord>()
             .Property(record => record.Status)
             .HasConversion(

@@ -69,6 +69,42 @@ public class MigrationTests
         Assert.Equal(ServiceStatus.Up, record.Status);
     }
 
+    [Fact]
+    public async Task LastKnownStatusMigrationCopiesUpAndDownAndKeepsHistory()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await using AsyncServiceScope scope = app.Services.CreateAsyncScope();
+        DeadSwitchDbContext db = scope.ServiceProvider.GetRequiredService<DeadSwitchDbContext>();
+        IMigrator migrator = db.GetService<IMigrator>();
+
+        await migrator.MigrateAsync("20261104105248_MakeCurrentStatusRequired");
+        Guid upId = Guid.NewGuid();
+        Guid downId = Guid.NewGuid();
+        Guid unknownId = Guid.NewGuid();
+        Guid recordId = Guid.NewGuid();
+        string url = "https://example.com";
+        string up = "UP";
+        string down = "DOWN";
+        string unknown = "UNKNOWN";
+        string checkedAt = "2026-01-01 12:00:00";
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO MonitoredServices (Id, Name, Url, CurrentStatus) VALUES ({upId}, {"Up"}, {url}, {up})");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO MonitoredServices (Id, Name, Url, CurrentStatus) VALUES ({downId}, {"Down"}, {url}, {down})");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO MonitoredServices (Id, Name, Url, CurrentStatus) VALUES ({unknownId}, {"Unknown"}, {url}, {unknown})");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO CheckRecords (Id, MonitoredServiceId, Url, CheckedAtUtc, Status, ResponseTimeMs) VALUES ({recordId}, {upId}, {url}, {checkedAt}, {up}, {12})");
+
+        await db.Database.MigrateAsync();
+
+        MonitoredService upService = await db.MonitoredServices.SingleAsync(service => service.Id == upId);
+        MonitoredService downService = await db.MonitoredServices.SingleAsync(service => service.Id == downId);
+        MonitoredService unknownService = await db.MonitoredServices.SingleAsync(service => service.Id == unknownId);
+        CheckRecord record = await db.CheckRecords.SingleAsync();
+        Assert.Equal(ServiceStatus.Up, upService.LastKnownStatus);
+        Assert.Equal(ServiceStatus.Down, downService.LastKnownStatus);
+        Assert.Null(unknownService.LastKnownStatus);
+        Assert.Equal(recordId, record.Id);
+    }
+
     // Fails if the model was changed without a matching migration.
     [Fact]
     public async Task ModelMatchesTheMigrations()

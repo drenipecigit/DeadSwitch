@@ -78,6 +78,9 @@ namespace DeadSwitch.Infrastructure.Migrations
                     b.Property<DateTimeOffset?>("LastCheckedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("LastKnownStatus")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("TEXT");
