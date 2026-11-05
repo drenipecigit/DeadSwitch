@@ -57,7 +57,7 @@ public static class ServiceEndpoints
 
     private static async Task<IResult> UpdateServiceAsync(
         Guid id,
-        RegisterServiceRequest request,
+        UpdateServiceRequest request,
         MonitoredServiceService service,
         CancellationToken ct)
     {

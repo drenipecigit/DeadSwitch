@@ -2,7 +2,7 @@ using DeadSwitch.Application.Services;
 
 namespace DeadSwitch.Api.Requests;
 
-// The JSON body of POST and PUT /services. Kept apart from ServiceConfiguration so the shape of
+// The JSON body of POST /services. Kept apart from ServiceConfiguration so the shape of
 // the HTTP request can change without touching the Application layer.
 // The default values decide what a field missing from the JSON becomes.
 public record RegisterServiceRequest(

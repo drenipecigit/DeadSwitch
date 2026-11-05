@@ -1,7 +1,6 @@
 namespace DeadSwitch.Application.Services;
 
 // A positional record, because the values are only passed along and never changed.
-// The default values also decide what a field missing from the JSON request becomes.
 public record ServiceConfiguration(
     string Name,
     string Url,
