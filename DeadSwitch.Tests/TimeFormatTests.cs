@@ -1,5 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using DeadSwitch.Api.Json;
+using DeadSwitch.Application.Interfaces;
 using DeadSwitch.Application.Services;
 using DeadSwitch.Domain;
 using DeadSwitch.Infrastructure.Data;
@@ -95,6 +97,92 @@ public class TimeFormatTests
 
         check.EnsureSuccessStatusCode();
         Assert.Equal("2026-11-03 12:00:00", await ReadOnlyCheckTimeTextAsync(app));
+    }
+
+    // The probe moves the clock during the check. A time read after the probe would then show
+    // 12:00:00.5, so this test also holds the contract that a check's time is when it started.
+    [Fact]
+    public async Task EveryRouteWritesTheStartOfTheCheckInUtcWithZ()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        ServiceConfiguration configuration = new ServiceConfiguration("Example", ExampleUrl);
+
+        HttpResponseMessage created = await client.PostAsJsonAsync("/services", configuration);
+        string createdJson = await created.Content.ReadAsStringAsync();
+        Assert.Contains("\"lastCheckedAt\":null", createdJson);
+        MonitoredService service = JsonSerializer.Deserialize<MonitoredService>(createdJson, TestJson.Options)!;
+
+        Task<ProbeResult> MoveClockDuringCheck(CancellationToken cancellationToken)
+        {
+            app.Clock.Advance(TimeSpan.FromMilliseconds(500));
+            return Task.FromResult(new ProbeResult(ServiceStatus.Up, 200, 500, null));
+        }
+
+        app.Probe.Check = MoveClockDuringCheck;
+        string expectedCheckedAt = "\"checkedAtUtc\":\"2026-11-03T12:00:00Z\"";
+        string expectedLastCheckedAt = "\"lastCheckedAt\":\"2026-11-03T12:00:00Z\"";
+
+        HttpResponseMessage check = await client.PostAsync($"/services/{service.Id}/check", null);
+        string checkJson = await check.Content.ReadAsStringAsync();
+        Assert.Contains(expectedCheckedAt, checkJson);
+
+        string historyJson = await client.GetStringAsync($"/services/{service.Id}/history");
+        Assert.Contains(expectedCheckedAt, historyJson);
+
+        string listJson = await client.GetStringAsync("/services");
+        Assert.Contains(expectedLastCheckedAt, listJson);
+
+        string serviceJson = await client.GetStringAsync($"/services/{service.Id}");
+        Assert.Contains(expectedLastCheckedAt, serviceJson);
+
+        // The URL is unchanged, so the update keeps the time of the last check.
+        HttpResponseMessage update = await client.PutAsJsonAsync($"/services/{service.Id}", configuration);
+        string updateJson = await update.Content.ReadAsStringAsync();
+        Assert.Contains(expectedLastCheckedAt, updateJson);
+
+        // This route runs a new check, which starts after the first one moved the clock.
+        string compatibilityJson = await client.GetStringAsync($"/services/{service.Id}/check");
+        Assert.Contains("\"lastCheckedAt\":\"2026-11-03T12:00:00.5Z\"", compatibilityJson);
+    }
+
+    // +01:00 has never been written by the application. It is tested anyway, because it shows that
+    // the time is converted to the same moment and that the sign is not just replaced by a Z.
+    [Theory]
+    [InlineData("2026-11-03 12:00:00+00:00", "2026-11-03T12:00:00Z")]
+    [InlineData("2026-11-03 12:00:00.25+00:00", "2026-11-03T12:00:00.25Z")]
+    [InlineData("2026-11-03 13:00:00+01:00", "2026-11-03T12:00:00Z")]
+    public async Task SavedLastCheckedTimeIsWrittenInUtcWithZ(string savedText, string expectedText)
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService service = await app.RegisterServiceAsync(client, new ServiceConfiguration("Example", ExampleUrl));
+        await SetLastCheckedTextAsync(app, service.Id, savedText);
+
+        string json = await client.GetStringAsync($"/services/{service.Id}");
+
+        Assert.Contains($"\"lastCheckedAt\":\"{expectedText}\"", json);
+    }
+
+    // No request contains a time today, so no other test reaches the Read method of the converter.
+    [Fact]
+    public void ConverterReadsATimeBackAsTheSameMoment()
+    {
+        JsonSerializerOptions options = new JsonSerializerOptions();
+        options.Converters.Add(new UtcDateTimeOffsetConverter());
+
+        DateTimeOffset time = JsonSerializer.Deserialize<DateTimeOffset>("\"2026-11-03T13:00:00+01:00\"", options);
+
+        Assert.Equal(new DateTimeOffset(2026, 11, 3, 12, 0, 0, TimeSpan.Zero), time);
+    }
+
+    private static async Task SetLastCheckedTextAsync(TestApp app, Guid serviceId, string lastCheckedAt)
+    {
+        await using AsyncServiceScope scope = app.Services.CreateAsyncScope();
+        DeadSwitchDbContext db = scope.ServiceProvider.GetRequiredService<DeadSwitchDbContext>();
+        await db.Database.ExecuteSqlInterpolatedAsync($"UPDATE MonitoredServices SET LastCheckedAt = {lastCheckedAt} WHERE Id = {serviceId}");
     }
 
     private static async Task InsertOldCheckRecordAsync(TestApp app, Guid serviceId, string checkedAt)

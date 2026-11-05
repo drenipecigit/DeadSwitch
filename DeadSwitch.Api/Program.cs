@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using DeadSwitch.Api.Endpoints;
+using DeadSwitch.Api.Json;
 using DeadSwitch.Api.Monitoring;
 using DeadSwitch.Application.Interfaces;
 using DeadSwitch.Application.Services;
@@ -20,6 +21,9 @@ builder.Services.AddProblemDetails();
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseUpper));
+
+    // Clients read every time in UTC with Z. Without this, a DateTimeOffset ends with +00:00.
+    options.SerializerOptions.Converters.Add(new UtcDateTimeOffsetConverter());
 });
 
 // TimeProvider instead of DateTime.UtcNow, so the tests can replace the clock with a fake.
