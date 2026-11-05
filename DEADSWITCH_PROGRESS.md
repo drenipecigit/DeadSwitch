@@ -296,6 +296,7 @@ Check records saved before this rule keep their old status: an earlier 3xx stays
 - A manual check gets 409 while the worker really is checking the same service, which is intended. A very short window also remains: a service that was due at the first read but not at the second holds the lock for a moment.
 - History is never cleaned up and grows without limit.
 - `SocketsHttpHandler.ConnectTimeout` is 10 seconds, even when `TimeoutSeconds` is higher. One address that never answers can use all of it before the next address is tried.
+- A host name longer than 255 characters passes `UrlSafety` and only fails at the DNS step, which gives DOWN. It should be rejected earlier.
 - A value in a status column other than `UP`, `DOWN` or `UNKNOWN` makes reading that row fail. The application only writes these three, so this needs a manual edit of the database.
 
 ## Code style exceptions
@@ -313,6 +314,13 @@ Proven by tests against a local server:
 - `PublicInternetConnector` resolves the host, rejects it if any address is non-public, then connects directly to a validated IP. This is the protection against DNS rebinding.
 - Redirects are not followed and cookies are not sent back.
 - The configuration lives in `ProtectedHttpHandler`. The version that accepts other address rules is `internal`, so only the test project can build a connector that allows private addresses.
+
+Layer 1 and the connection now judge the same name:
+- **What got through:** `UrlSafety` used to judge `Uri.DnsSafeHost`, while the connection uses `Uri.IdnHost`. These can differ. `http://ｌｏｃａｌｈｏｓｔ/` and `http://１２７.０.０.１/` were therefore accepted by `POST`, by `PUT` and by `GET /check`, although the connection would use `localhost` and `127.0.0.1`. The same went for other characters that count as a dot, such as `127。0。0。1`, and for fullwidth forms of `10.0.0.1` and `169.254.169.254`.
+- **What stopped it:** `PublicInternetConnector`, layer 2, blocked these addresses at connection time, and the status became UNKNOWN. This was measured with a fake DNS and through the real handler. Only the first line of defence was missing.
+- **A second effect of the same cause:** a host that cannot be converted, such as one with a soft hyphen as its only label character (`http://­.example.com/`), was accepted by `UrlSafety` and then threw `UriFormatException` inside `HttpClient`. `GET /check` returned 500. The worker logged the error, saved no history and tried again on every pass, because the service stayed due.
+- **The fix:** layer 1 now judges `IdnHost`, the same name the connection uses, and always tries the converted text as an IP address instead of relying on `Uri.HostNameType`. A host that cannot be converted is rejected. A row saved before the fix gets UNKNOWN at its next check, and its interval applies again.
+- `DnsSafeHost` and `IdnHost` gave the same text for all 25 addresses compared, IPv6 included, so ordinary addresses are not affected.
 
 Checked as settings only, **not by running them**:
 - `UseProxy = false` and `PooledConnectionLifetime`. `ConnectTimeout` is not checked at all.

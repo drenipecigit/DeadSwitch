@@ -14,6 +14,8 @@ public class UrlSafetyTests
     [InlineData("http://[::1]")]
     [InlineData("http://[::ffff:127.0.0.1]")]
     [InlineData("http://[::ffff:7f00:1]")]
+    [InlineData("http://[::1%25eth0]")]
+    [InlineData("http://[fe80::1%251]")]
     [InlineData("http://2130706433")]
     [InlineData("http://127.1")]
     [InlineData("http://127.0.0.1.")]
@@ -52,6 +54,21 @@ public class UrlSafetyTests
         Uri uri = UrlSafety.Validate(url);
 
         Assert.Equal(new Uri(url), uri);
+    }
+
+    [Theory]
+    [MemberData(nameof(UnicodeHostUrls.Forbidden), MemberType = typeof(UnicodeHostUrls))]
+    [MemberData(nameof(UnicodeHostUrls.CannotBeConverted), MemberType = typeof(UnicodeHostUrls))]
+    public void HostsThatConnectSomewhereForbiddenOrCannotBeConvertedAreRejected(string url)
+    {
+        Assert.Throws<ArgumentException>(() => UrlSafety.Validate(url));
+    }
+
+    [Theory]
+    [MemberData(nameof(UnicodeHostUrls.AllowedNames), MemberType = typeof(UnicodeHostUrls))]
+    public void NamesThatAreReallyPublicAreAccepted(string url)
+    {
+        Assert.NotNull(UrlSafety.Validate(url));
     }
 
     [Fact]

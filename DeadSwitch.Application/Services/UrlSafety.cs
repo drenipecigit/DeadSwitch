@@ -92,10 +92,16 @@ public static class UrlSafety
 
     private static bool HasPublicHost(Uri uri)
     {
+        string? connectionHost = GetConnectionHost(uri);
+        if (connectionHost == null)
+        {
+            return false;
+        }
+
         // Uri has already rewritten odd forms: "http://2130706433" has become 127.0.0.1 here.
         // The brackets an IPv6 host is written with are removed, so only the address is compared.
         // A trailing dot is the same name in DNS: "localhost." is "localhost".
-        string host = uri.DnsSafeHost.Trim('[', ']').TrimEnd('.');
+        string host = connectionHost.Trim('[', ']').TrimEnd('.');
 
         if (host.Equals("localhost", StringComparison.OrdinalIgnoreCase))
         {
@@ -107,6 +113,8 @@ public static class UrlSafety
             return false;
         }
 
+        // Always tried on the converted text, and never decided from Uri.HostNameType. Uri calls the
+        // fullwidth form of 127.0.0.1 a name, and only after the conversion is it plainly an address.
         IPAddress? address;
         if (IPAddress.TryParse(host, out address))
         {
@@ -115,6 +123,22 @@ public static class UrlSafety
 
         // An ordinary hostname. Its real addresses are checked when connecting.
         return true;
+    }
+
+    // Security-critical: IdnHost is the name the connection really uses, so this is the name to judge.
+    // In DnsSafeHost a fullwidth "localhost" is only an unfamiliar name, which would pass this check.
+    // A host that cannot be converted would throw later inside HttpClient, so it is rejected here.
+    // Returns null when the host cannot be converted.
+    private static string? GetConnectionHost(Uri uri)
+    {
+        try
+        {
+            return uri.IdnHost;
+        }
+        catch (UriFormatException)
+        {
+            return null;
+        }
     }
 
     // Every rule below excludes a range that is not the public Internet.
