@@ -17,6 +17,13 @@ builder.Services.AddOpenApi();
 // Makes error responses use the standard Problem Details JSON format.
 builder.Services.AddProblemDetails();
 
+// Otherwise a bad request is only thrown in Development. In Production the framework answers on its
+// own with an empty body, so the two environments would behave differently.
+builder.Services.Configure<RouteHandlerOptions>(options =>
+{
+    options.ThrowOnBadRequest = true;
+});
+
 // Clients read status as "UP", "DOWN" and "UNKNOWN". Without this, an enum becomes a number in JSON.
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
@@ -73,17 +80,36 @@ WebApplication app = builder.Build();
 // Turns unexpected exceptions into a 500 response in the Problem Details format.
 app.UseExceptionHandler();
 
+const string UnreadableRequestTitle = "Invalid request";
+const string UnreadableRequestDetail = "The request could not be read.";
+
 // Translates the exceptions the Application layer uses for expected errors into status codes.
 app.Use(async (context, next) =>
 {
     try
     {
         await next(context);
+
+        // A wrong content type throws nothing: the framework only sets 415 and leaves the body empty.
+        // It gets the same fixed answer here, so that every error has the same format.
+        if (context.Response.StatusCode == StatusCodes.Status415UnsupportedMediaType && !context.Response.HasStarted)
+        {
+            IResult problem = Results.Problem(statusCode: StatusCodes.Status415UnsupportedMediaType, title: UnreadableRequestTitle, detail: UnreadableRequestDetail);
+            await problem.ExecuteAsync(context);
+        }
     }
     catch (ServiceValidationException ex)
     {
         // Safe to show: this exception only ever holds fixed texts that we wrote ourselves.
         IResult problem = Results.Problem(statusCode: 400, title: "Invalid configuration", detail: ex.Message);
+        await problem.ExecuteAsync(context);
+    }
+    catch (BadHttpRequestException ex)
+    {
+        // Fixed text on purpose: ex.Message names the parameter and the class, and the inner exception
+        // holds the JSON path and position. The status code is kept because it is not always 400:
+        // a body that is too large gives 413.
+        IResult problem = Results.Problem(statusCode: ex.StatusCode, title: UnreadableRequestTitle, detail: UnreadableRequestDetail);
         await problem.ExecuteAsync(context);
     }
     catch (CheckInProgressException ex)

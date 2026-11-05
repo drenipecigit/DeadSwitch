@@ -25,6 +25,7 @@ internal sealed class TestApp : WebApplicationFactory<Program>
     // An in-memory SQLite database is deleted when its last connection closes.
     // This connection stays open so the data survives between the API's own connections.
     private readonly SqliteConnection _keeper;
+    private readonly string _environmentName;
 
     public TestProbe Probe { get; } = new TestProbe();
 
@@ -33,8 +34,16 @@ internal sealed class TestApp : WebApplicationFactory<Program>
 
     public TestRepositoryControl RepositoryControl { get; } = new TestRepositoryControl();
 
-    public TestApp()
+    public TestApp() : this("Development")
     {
+    }
+
+    // The framework treats a bad request differently in Development and Production, so the tests
+    // of error responses run in both.
+    public TestApp(string environmentName)
+    {
+        _environmentName = environmentName;
+
         // The unique name gives every test its own database.
         _keeper = new SqliteConnection($"Data Source=test-{Guid.NewGuid()};Mode=Memory;Cache=Shared");
         _keeper.Open();
@@ -42,6 +51,8 @@ internal sealed class TestApp : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        builder.UseEnvironment(_environmentName);
+
         // The tests run worker passes by hand, so the background loop must not run at the same time.
         builder.UseSetting("Monitoring:Enabled", "false");
 
