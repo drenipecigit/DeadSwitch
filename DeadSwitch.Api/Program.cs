@@ -170,6 +170,8 @@ if (app.Environment.IsDevelopment())
 
 ServiceEndpoints.Map(app);
 
+app.Lifetime.ApplicationStarted.Register(() => LocalOnlyCheck.StopIfListeningBeyondLoopback(app));
+
 app.Run();
 
 // no-cache means "ask the server first", so that a browser never keeps running an old script.

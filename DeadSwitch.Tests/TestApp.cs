@@ -6,6 +6,7 @@ using DeadSwitch.Domain;
 using DeadSwitch.Infrastructure.Data;
 using DeadSwitch.Infrastructure.Repositories;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -13,6 +14,7 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -38,6 +40,12 @@ internal sealed class TestApp : WebApplicationFactory<Program>
     public TestNotifier Notifier { get; } = new TestNotifier();
 
     public CapturedLogs Logs { get; } = new CapturedLogs();
+
+    // When set, the test server claims to listen on this address. No port is opened.
+    public string? PretendedAddress { get; set; }
+
+    // Finished when the application starts to stop. Only used together with PretendedAddress.
+    public TaskCompletionSource ApplicationStopping { get; } = new TaskCompletionSource();
 
     // The address the application reads. It is empty unless a test asks for the real notifier.
     private readonly string _webhookUrl = "";
@@ -103,7 +111,19 @@ internal sealed class TestApp : WebApplicationFactory<Program>
             {
                 services.AddHttpClient(nameof(INotifier)).ConfigurePrimaryHttpMessageHandler(CreateDiscordStub);
             }
+
+            if (PretendedAddress != null)
+            {
+                services.AddHostedService(CreatePretendedAddress);
+            }
         });
+    }
+
+    private PretendedServerAddress CreatePretendedAddress(IServiceProvider provider)
+    {
+        IServer server = provider.GetRequiredService<IServer>();
+        IHostApplicationLifetime lifetime = provider.GetRequiredService<IHostApplicationLifetime>();
+        return new PretendedServerAddress(server, lifetime, PretendedAddress!, ApplicationStopping);
     }
 
     // Development reads user secrets, so the tests would otherwise see the owner's real webhook address.
