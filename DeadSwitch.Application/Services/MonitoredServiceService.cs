@@ -52,6 +52,43 @@ public class MonitoredServiceService
         return _repository.GetAllAsync(ct);
     }
 
+    public async Task<List<ServiceOverview>> GetOverviewAsync(CancellationToken ct = default)
+    {
+        List<MonitoredService> services = await _repository.GetAllAsync(ct);
+        List<ServiceOverview> overview = new List<ServiceOverview>();
+
+        foreach (MonitoredService service in services)
+        {
+            long? responseTimeMs = null;
+            string? failureReason = null;
+
+            // A new URL empties LastCheckedAt but keeps the history. Without this check the row would
+            // show the response time of the old address, also after changing back to an earlier URL.
+            if (service.LastCheckedAt.HasValue)
+            {
+                List<CheckRecord> latest = await _repository.GetHistoryAsync(service.Id, 0, 1, ct);
+                if (latest.Count > 0)
+                {
+                    responseTimeMs = latest[0].ResponseTimeMs;
+                    failureReason = latest[0].FailureReason;
+                }
+            }
+
+            overview.Add(new ServiceOverview(
+                service.Id,
+                service.Name,
+                service.Url,
+                service.CurrentStatus,
+                service.LastKnownStatus,
+                service.LastCheckedAt,
+                service.IsEnabled,
+                responseTimeMs,
+                failureReason));
+        }
+
+        return overview;
+    }
+
     public Task<MonitoredService?> GetByIdAsync(Guid id, CancellationToken ct = default)
     {
         return _repository.GetByIdAsync(id, ct);

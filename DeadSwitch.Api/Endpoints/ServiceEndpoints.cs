@@ -15,6 +15,7 @@ public static class ServiceEndpoints
         app.MapGet("/health", GetHealth);
         app.MapPost("/services", RegisterServiceAsync);
         app.MapGet("/services", GetAllServicesAsync);
+        app.MapGet("/services/overview", GetOverviewAsync);
         app.MapGet("/services/{id:guid}", GetServiceAsync);
         app.MapPut("/services/{id:guid}", UpdateServiceAsync);
         app.MapDelete("/services/{id:guid}", DeleteServiceAsync);
@@ -42,6 +43,12 @@ public static class ServiceEndpoints
     {
         List<MonitoredService> services = await service.GetAllAsync(ct);
         return Results.Ok(services);
+    }
+
+    private static async Task<IResult> GetOverviewAsync(MonitoredServiceService service, CancellationToken ct)
+    {
+        List<ServiceOverview> overview = await service.GetOverviewAsync(ct);
+        return Results.Ok(overview);
     }
 
     private static async Task<IResult> GetServiceAsync(Guid id, MonitoredServiceService service, CancellationToken ct)
