@@ -438,6 +438,8 @@ Done by the owner on 2026-11-05 against a real Discord channel, on the real serv
 
 This also confirms that a real address under `/api/webhooks/` on `discord.com` works, and that HTTPS through the connector reaches Discord. It is one run with one channel, and it shows that Discord obeyed the empty `parse` in these messages.
 
+Done by the owner on 2026-11-05: `dotnet test` with the real webhook secret set in user secrets gave 623 passed, and no new message arrived in the Discord channel. This is one run.
+
 ### Not run manually
 
 Proven by tests only, and not confirmed against the real Discord:
@@ -445,7 +447,6 @@ Proven by tests only, and not confirmed against the real Discord:
 - The DOWN to UP message.
 - A wrong token: the check is saved and the log shows the status code.
 - Notifications turned off with an empty address, during a run with a status change. The startup line and the application starting were confirmed on the real server without any check.
-- `dotnet test` with the real secret set: no result has been recorded. The override in `TestApp` is proven with an environment variable, which has a higher priority than user secrets.
 
 ### Never run so far
 
@@ -642,7 +643,7 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes early so that every new feature is visible in it at once. The MVP still covers phases 1 to 4; the dashboard is built earlier but is not part of the MVP. Each task is one branch, with a plan approved first.
 
-**Next step:** the owner reviews and merges `feat/discord-notifications`. After that comes phase 5, the dashboard, with a plan approved first.
+**Next step:** phase 5, the dashboard, on `feat/dashboard`. The plan is approved.
 
 ### Phase 1: Stable foundation
 
