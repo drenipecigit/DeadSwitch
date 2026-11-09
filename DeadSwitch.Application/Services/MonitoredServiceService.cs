@@ -61,6 +61,9 @@ public class MonitoredServiceService
         {
             long? responseTimeMs = null;
             string? failureReason = null;
+            string? securityGrade = null;
+            string? missingSecurityHeaders = null;
+            string? securityNotAssessedReason = null;
 
             // A new URL empties LastCheckedAt but keeps the history. Without this check the row would
             // show the response time of the old address, also after changing back to an earlier URL.
@@ -71,6 +74,9 @@ public class MonitoredServiceService
                 {
                     responseTimeMs = latest[0].ResponseTimeMs;
                     failureReason = latest[0].FailureReason;
+                    securityGrade = latest[0].SecurityGrade;
+                    missingSecurityHeaders = latest[0].MissingSecurityHeaders;
+                    securityNotAssessedReason = latest[0].SecurityNotAssessedReason;
                 }
             }
 
@@ -83,7 +89,10 @@ public class MonitoredServiceService
                 service.LastCheckedAt,
                 service.IsEnabled,
                 responseTimeMs,
-                failureReason));
+                failureReason,
+                securityGrade,
+                missingSecurityHeaders,
+                securityNotAssessedReason));
         }
 
         return overview;
@@ -207,6 +216,14 @@ public class MonitoredServiceService
             record.StatusCode = result.StatusCode;
             record.ResponseTimeMs = result.ResponseTimeMs;
             record.FailureReason = result.FailureReason;
+
+            // Null when no response was received, and then the three fields stay empty.
+            if (result.SecurityHeaders != null)
+            {
+                record.SecurityGrade = result.SecurityHeaders.Grade;
+                record.MissingSecurityHeaders = result.SecurityHeaders.MissingHeaders;
+                record.SecurityNotAssessedReason = result.SecurityHeaders.NotAssessedReason;
+            }
 
             // Must be read before CurrentStatus is overwritten below.
             bool becameUnknown = result.Status == ServiceStatus.Unknown && service.CurrentStatus != ServiceStatus.Unknown;

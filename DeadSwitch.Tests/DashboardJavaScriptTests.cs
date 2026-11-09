@@ -205,6 +205,9 @@ public class DashboardJavaScriptTests
     [InlineData("service.isEnabled")]
     [InlineData("service.responseTimeMs")]
     [InlineData("service.failureReason")]
+    [InlineData("service.securityGrade")]
+    [InlineData("service.missingSecurityHeaders")]
+    [InlineData("service.securityNotAssessedReason")]
     public async Task TheScriptReadsEveryFieldOfTheOverview(string field)
     {
         string script = await ReadFileAsync("/dashboard.js");
@@ -218,6 +221,7 @@ public class DashboardJavaScriptTests
     [InlineData("no-services")]
     [InlineData("table-frame")]
     [InlineData("service-rows")]
+    [InlineData("grade-explanation")]
     public async Task ThePageHasEveryElementTheScriptLooksFor(string id)
     {
         string script = await ReadFileAsync("/dashboard.js");
@@ -225,6 +229,60 @@ public class DashboardJavaScriptTests
 
         Assert.Contains($"getElementById(\"{id}\")", script);
         Assert.Contains($"id=\"{id}\"", page);
+    }
+
+    [Fact]
+    public async Task TheMeaningOfTheGradeIsWrittenThroughTextContent()
+    {
+        string script = await ReadFileAsync("/dashboard.js");
+
+        Assert.Contains("\"Grade A means that all five security headers are present. Their values are not assessed.\"", script);
+        Assert.Contains("getElementById(\"grade-explanation\").textContent = GRADE_EXPLANATION;", script);
+    }
+
+    // createTextCell is the only way a value reaches these cells, and it writes through textContent.
+    [Theory]
+    [InlineData("createTextCell(formatSecurityGrade(service), ")]
+    [InlineData("createTextCell(formatHeaderDetails(service), ")]
+    public async Task TheSecurityCellsAreWrittenAsText(string cellCode)
+    {
+        string script = await ReadFileAsync("/dashboard.js");
+
+        Assert.Contains(cellCode, script);
+    }
+
+    [Theory]
+    [InlineData("\"Not assessed\"")]
+    [InlineData("\"None\"")]
+    public async Task TheFixedCellTextsAreInTheScript(string text)
+    {
+        string script = await ReadFileAsync("/dashboard.js");
+
+        Assert.Contains(text, script);
+    }
+
+    [Theory]
+    [InlineData("Security grade")]
+    [InlineData("Header details")]
+    public async Task ThePageHasTheSecurityColumns(string heading)
+    {
+        string page = await ReadFileAsync("/");
+
+        Assert.Contains($"<th scope=\"col\">{heading}</th>", page);
+    }
+
+    // A row with another number of cells than the head would put every value in the wrong column.
+    [Fact]
+    public async Task EveryColumnHasOneCellInTheRow()
+    {
+        string script = await ReadFileAsync("/dashboard.js");
+        string page = await ReadFileAsync("/");
+
+        int headings = Regex.Matches(page, "<th scope=\"col\">").Count;
+        int cells = Regex.Matches(script, @"row\.appendChild\(").Count;
+
+        Assert.Equal(9, headings);
+        Assert.Equal(headings, cells);
     }
 
     private static bool HasCodeThatRunsText(string code)

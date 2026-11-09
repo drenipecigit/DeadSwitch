@@ -36,16 +36,19 @@ public sealed class HttpHealthProbe : IHealthProbe
 
             int statusCode = (int)response.StatusCode;
 
+            // Read from the response that is already here, so no extra request is sent.
+            SecurityHeaderCheck securityHeaders = SecurityHeaderReader.Read(uri, statusCode, response.Headers);
+
             // A redirect proves that the server answered, so it counts as UP. The target is never
             // followed or checked, which means a redirect to a broken page also counts as UP.
             bool isRedirect = statusCode >= 300 && statusCode <= 399;
 
             if (response.IsSuccessStatusCode || isRedirect)
             {
-                return new ProbeResult(ServiceStatus.Up, statusCode, stopwatch.ElapsedMilliseconds, null);
+                return new ProbeResult(ServiceStatus.Up, statusCode, stopwatch.ElapsedMilliseconds, null, securityHeaders);
             }
 
-            return new ProbeResult(ServiceStatus.Down, statusCode, stopwatch.ElapsedMilliseconds, $"HTTP {statusCode}");
+            return new ProbeResult(ServiceStatus.Down, statusCode, stopwatch.ElapsedMilliseconds, $"HTTP {statusCode}", securityHeaders);
         }
         catch (OperationCanceledException)
         {

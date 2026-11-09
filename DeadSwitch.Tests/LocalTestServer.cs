@@ -84,6 +84,37 @@ internal sealed class LocalTestServer : IAsyncDisposable
             context.Response.Headers.SetCookie = "session=abc";
             return Results.Ok();
         });
+        _app.MapGet("/security-headers", SendSecurityHeaders);
+        _app.MapGet("/blank-security-header", SendOneBlankSecurityHeader);
+        _app.MapGet("/large-header", SendLargeHeader);
+    }
+
+    private static IResult SendSecurityHeaders(HttpContext context)
+    {
+        foreach (string name in TestSecurityHeaders.AllNames)
+        {
+            context.Response.Headers[name] = TestSecurityHeaders.OrdinaryValue;
+        }
+
+        return Results.Ok();
+    }
+
+    // All five are sent, and the one named in the query holds nothing but spaces.
+    private static IResult SendOneBlankSecurityHeader(HttpContext context, string name)
+    {
+        foreach (string headerName in TestSecurityHeaders.AllNames)
+        {
+            context.Response.Headers[headerName] = TestSecurityHeaders.OrdinaryValue;
+        }
+
+        context.Response.Headers[name] = "   ";
+        return Results.Ok();
+    }
+
+    private static IResult SendLargeHeader(HttpContext context, int kilobytes)
+    {
+        context.Response.Headers["X-Padding"] = new string('a', kilobytes * 1024);
+        return Results.Ok();
     }
 
     public async ValueTask DisposeAsync()

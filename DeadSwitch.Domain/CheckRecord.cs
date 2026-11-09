@@ -17,4 +17,14 @@ public class CheckRecord
 
     public long ResponseTimeMs { get; set; }
     public string? FailureReason { get; set; }
+
+    // A letter from SecurityHeaderRule, or null when the response was not assessed.
+    public string? SecurityGrade { get; set; }
+
+    // Header names from SecurityHeaderRule. An empty text means that nothing is missing, and null
+    // means that the response was not assessed. The difference matters, so they are kept apart.
+    public string? MissingSecurityHeaders { get; set; }
+
+    // A fixed text saying why the response got no grade.
+    public string? SecurityNotAssessedReason { get; set; }
 }

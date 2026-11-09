@@ -105,6 +105,34 @@ public class MigrationTests
         Assert.Equal(recordId, record.Id);
     }
 
+    [Fact]
+    public async Task SecurityHeaderMigrationKeepsOldRecordsWithoutAGrade()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await using AsyncServiceScope scope = app.Services.CreateAsyncScope();
+        DeadSwitchDbContext db = scope.ServiceProvider.GetRequiredService<DeadSwitchDbContext>();
+        IMigrator migrator = db.GetService<IMigrator>();
+
+        await migrator.MigrateAsync("20261105074323_AddLastKnownStatusToMonitoredService");
+        Guid serviceId = Guid.NewGuid();
+        Guid recordId = Guid.NewGuid();
+        string url = "https://example.com";
+        string up = "UP";
+        string checkedAt = "2026-01-01 12:00:00";
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO MonitoredServices (Id, Name, Url, CurrentStatus) VALUES ({serviceId}, {"Old"}, {url}, {up})");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO CheckRecords (Id, MonitoredServiceId, Url, CheckedAtUtc, Status, ResponseTimeMs) VALUES ({recordId}, {serviceId}, {url}, {checkedAt}, {up}, {12})");
+
+        await db.Database.MigrateAsync();
+
+        CheckRecord record = await db.CheckRecords.SingleAsync();
+        Assert.Equal(recordId, record.Id);
+        Assert.Equal(ServiceStatus.Up, record.Status);
+        Assert.Null(record.SecurityGrade);
+        Assert.Null(record.MissingSecurityHeaders);
+        Assert.Null(record.SecurityNotAssessedReason);
+    }
+
     // Fails if the model was changed without a matching migration.
     [Fact]
     public async Task ModelMatchesTheMigrations()

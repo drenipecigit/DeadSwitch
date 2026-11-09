@@ -33,7 +33,10 @@ public static class ProtectedHttpHandler
             // address is checked again.
             PooledConnectionLifetime = TimeSpan.FromMinutes(2),
             // Known limitation: this also applies when a service's own TimeoutSeconds is higher.
-            ConnectTimeout = TimeSpan.FromSeconds(10)
+            ConnectTimeout = TimeSpan.FromSeconds(10),
+            // In kilobytes. The same as the framework's default, written out because the headers come
+            // from a server we do not control, and this limit should be a decision and not a coincidence.
+            MaxResponseHeadersLength = 64
         };
     }
 }

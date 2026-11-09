@@ -7,6 +7,7 @@
 
 const REFRESH_MILLISECONDS = 10000;
 const FETCH_TIMEOUT_MILLISECONDS = 5000;
+const GRADE_EXPLANATION = "Grade A means that all five security headers are present. Their values are not assessed.";
 
 let lastSuccessfulUpdate = null;
 
@@ -69,6 +70,8 @@ function createRow(service) {
   row.appendChild(createTextCell(formatResponseTime(service.responseTimeMs), "no-wrap"));
   row.appendChild(createTextCell(formatTime(service.lastCheckedAt), "no-wrap"));
   row.appendChild(createTextCell(formatFailureReason(service.failureReason), "wrap-text"));
+  row.appendChild(createTextCell(formatSecurityGrade(service), "no-wrap"));
+  row.appendChild(createTextCell(formatHeaderDetails(service), "wrap-text"));
 
   return row;
 }
@@ -148,6 +151,35 @@ function formatFailureReason(reason) {
   return reason;
 }
 
+function formatSecurityGrade(service) {
+  if (service.securityGrade !== null) {
+    return service.securityGrade;
+  }
+
+  if (service.securityNotAssessedReason !== null) {
+    return "Not assessed";
+  }
+
+  return "-";
+}
+
+// Shows why there is no grade, or else which headers are missing. An empty text means none are.
+function formatHeaderDetails(service) {
+  if (service.securityNotAssessedReason !== null) {
+    return service.securityNotAssessedReason;
+  }
+
+  if (service.missingSecurityHeaders === null) {
+    return "-";
+  }
+
+  if (service.missingSecurityHeaders === "") {
+    return "None";
+  }
+
+  return service.missingSecurityHeaders;
+}
+
 function showUpdateSucceeded() {
   lastSuccessfulUpdate = new Date();
 
@@ -169,4 +201,5 @@ function showUpdateFailed() {
   document.getElementById("table-frame").classList.add("stale");
 }
 
+document.getElementById("grade-explanation").textContent = GRADE_EXPLANATION;
 refresh();

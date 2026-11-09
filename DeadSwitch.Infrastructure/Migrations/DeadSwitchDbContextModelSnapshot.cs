@@ -29,11 +29,20 @@ namespace DeadSwitch.Infrastructure.Migrations
                     b.Property<string>("FailureReason")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("MissingSecurityHeaders")
+                        .HasColumnType("TEXT");
+
                     b.Property<Guid>("MonitoredServiceId")
                         .HasColumnType("TEXT");
 
                     b.Property<long>("ResponseTimeMs")
                         .HasColumnType("INTEGER");
+
+                    b.Property<string>("SecurityGrade")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SecurityNotAssessedReason")
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("Status")
                         .IsRequired()

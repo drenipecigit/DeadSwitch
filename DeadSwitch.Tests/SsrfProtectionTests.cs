@@ -71,6 +71,7 @@ public class SsrfProtectionTests
         Assert.False(handler.UseCookies);
         Assert.NotNull(handler.ConnectCallback);
         Assert.Equal(TimeSpan.FromMinutes(2), handler.PooledConnectionLifetime);
+        Assert.Equal(64, handler.MaxResponseHeadersLength);
     }
 
     // The control for all the blocking tests: it shows the server can be reached when the rule

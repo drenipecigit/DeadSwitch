@@ -76,6 +76,11 @@ h1 {
   color: var(--muted);
 }
 
+.grade-explanation {
+  margin: 0 0 16px;
+  color: var(--muted);
+}
+
 /* Only the table scrolls on a narrow screen, not the whole page. */
 .table-frame {
   overflow-x: auto;
