@@ -261,6 +261,18 @@ public class DashboardJavaScriptTests
         Assert.Contains(text, script);
     }
 
+    // Finds that the value is returned, and not that the right branch is chosen. Only a browser shows that.
+    [Theory]
+    [InlineData("return service.securityGrade;")]
+    [InlineData("return service.missingSecurityHeaders;")]
+    [InlineData("return service.securityNotAssessedReason;")]
+    public async Task TheSecurityCellsReturnTheValuesFromTheOverview(string returnCode)
+    {
+        string script = await ReadFileAsync("/dashboard.js");
+
+        Assert.Contains(returnCode, script);
+    }
+
     [Theory]
     [InlineData("Security grade")]
     [InlineData("Header details")]
