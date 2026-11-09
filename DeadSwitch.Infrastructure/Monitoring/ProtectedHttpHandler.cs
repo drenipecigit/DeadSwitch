@@ -8,11 +8,28 @@ public static class ProtectedHttpHandler
 {
     public static SocketsHttpHandler Create()
     {
-        PublicInternetConnector connector = new PublicInternetConnector(
-            Dns.GetHostAddressesAsync,
-            UrlSafety.IsPublicAddress);
+        return Create(CreatePublicInternetConnector());
+    }
 
-        return Create(connector);
+    // For the health probe: the same handler, which also notes the certificate of each handshake.
+    public static SocketsHttpHandler Create(TlsHandshakeRecorder recorder)
+    {
+        return Create(CreatePublicInternetConnector(), recorder);
+    }
+
+    private static PublicInternetConnector CreatePublicInternetConnector()
+    {
+        return new PublicInternetConnector(Dns.GetHostAddressesAsync, UrlSafety.IsPublicAddress);
+    }
+
+    // Security-critical: this callback replaces the framework's own decision about the certificate.
+    // OnRemoteCertificate must therefore give the same answer as the framework. No separate connection
+    // is opened: the certificate is the one presented on the connection that carries the request.
+    internal static SocketsHttpHandler Create(PublicInternetConnector connector, TlsHandshakeRecorder recorder)
+    {
+        SocketsHttpHandler handler = Create(connector);
+        handler.SslOptions.RemoteCertificateValidationCallback = recorder.OnRemoteCertificate;
+        return handler;
     }
 
     // Internal on purpose: a connector with other rules can allow private addresses. Only the
