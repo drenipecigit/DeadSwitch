@@ -43,7 +43,7 @@ public class CertificateProbeTests : IDisposable
         Assert.Null(result.Certificate.NotAssessedReason);
     }
 
-    // Point 1: a response was received, so an entry can never turn it into an invalid certificate.
+    // A response was received, so an entry can never turn it into an invalid certificate.
     [Theory]
     [InlineData(HttpStatusCode.OK, ServiceStatus.Up)]
     [InlineData(HttpStatusCode.Found, ServiceStatus.Up)]
@@ -128,7 +128,7 @@ public class CertificateProbeTests : IDisposable
         Assert.Null(result.Certificate);
     }
 
-    // Point 2: every way out of a check clears the entry, so it cannot be read by a later check.
+    // Every way out of a check clears the entry, so it cannot be read by a later check.
     [Fact]
     public async Task TheEntryIsGoneAfterASuccess()
     {
@@ -242,7 +242,7 @@ public class CertificateProbeTests : IDisposable
         Assert.Null(result.Certificate);
     }
 
-    // Point 6: Connection: close does not exist in HTTP/2, so a higher version would mean reused connections.
+    // Connection: close does not exist in HTTP/2, so a higher version would mean reused connections.
     [Fact]
     public async Task TheProbeAsksForExactlyHttp11AndAClosedConnection()
     {
@@ -256,7 +256,7 @@ public class CertificateProbeTests : IDisposable
         Assert.True(handler.LastRequest.Headers.ConnectionClose);
     }
 
-    // Point 7: an entry that cannot be matched to this host only means that nothing was seen.
+    // An entry that cannot be matched to this host only means that nothing was seen.
     [Fact]
     public async Task AnEntryForAnotherHostGivesNoDateWithAResponse()
     {

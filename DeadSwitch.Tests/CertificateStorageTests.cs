@@ -104,7 +104,7 @@ public class CertificateStorageTests
         Assert.DoesNotContain(HostileMarker, changes[0].ToString());
     }
 
-    // Point 3: GET /check shares the recorder with the saved checks, through the API.
+    // GET /check shares the recorder with the saved checks, through the API.
     [Fact]
     public async Task ARejectedCertificateOnGetCheckDoesNotAffectALaterCheck()
     {

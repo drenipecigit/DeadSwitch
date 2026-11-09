@@ -83,7 +83,7 @@ public class RealTlsProbeTests
         Assert.Equal("close", server.Requests[0].ConnectionHeader);
     }
 
-    // Point 3: the two share one entry, so one of them may see nothing. Neither may be called invalid.
+    // The two share one entry, so one of them may see nothing. Neither may be called invalid.
     [Fact]
     public async Task TwoChecksOfTheSameHostAtOnceAreNeverCalledInvalid()
     {
@@ -103,7 +103,7 @@ public class RealTlsProbeTests
         AssertDateOrNothingSeen(secondResult, certificate);
     }
 
-    // Point 7: the name in the URL, the name in the handshake and the entry must all be the same host.
+    // The name in the URL, the name in the handshake and the entry must all be the same host.
     [Theory]
     [InlineData("https://monitored.test/ok")]
     [InlineData("https://MONITORED.test/ok")]

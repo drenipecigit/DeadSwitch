@@ -31,7 +31,7 @@ public class CertificateOverviewTests
         Assert.Equal(JsonValueKind.Null, row.GetProperty("certificateNotAssessedReason").ValueKind);
     }
 
-    // Point 5, through the API with a fake clock, because no test can run the page's JavaScript.
+    // Through the API with a fake clock, because no test can run the page's JavaScript.
     [Theory]
     [InlineData(-TimeSpan.TicksPerDay, -1, "Expired")]
     [InlineData(-1L, -1, "Expired")]
@@ -68,13 +68,13 @@ public class CertificateOverviewTests
         Assert.Equal("Expired", row.GetProperty("certificateExpiryText").GetString());
     }
 
-    // Point 4: only the newest check counts, so an older date must never be shown after one of these.
+    // Only the newest check counts, so an older date must never be shown after one of these.
     [Fact]
     public async Task ATimeoutHidesTheOlderDate()
     {
         ProbeResult timeout = new ProbeResult(ServiceStatus.Down, null, 10, "Check timed out.");
 
-        JsonElement row = await GetRowAfterAGoodCheckAndAsync(timeout);
+        JsonElement row = await GetRowAfterAGoodCheckFollowedByAsync(timeout);
 
         AssertNoDate(row, null);
     }
@@ -84,7 +84,7 @@ public class CertificateOverviewTests
     {
         ProbeResult noHandshake = new ProbeResult(ServiceStatus.Up, 200, 10, null, null, new CertificateCheck(null, Reason));
 
-        JsonElement row = await GetRowAfterAGoodCheckAndAsync(noHandshake);
+        JsonElement row = await GetRowAfterAGoodCheckFollowedByAsync(noHandshake);
 
         AssertNoDate(row, Reason);
     }
@@ -94,7 +94,7 @@ public class CertificateOverviewTests
     {
         ProbeResult rejected = new ProbeResult(ServiceStatus.Down, null, 10, "Connection, DNS or TLS failure.", null, new CertificateCheck(null, Reason));
 
-        JsonElement row = await GetRowAfterAGoodCheckAndAsync(rejected);
+        JsonElement row = await GetRowAfterAGoodCheckFollowedByAsync(rejected);
 
         AssertNoDate(row, Reason);
     }
@@ -128,7 +128,7 @@ public class CertificateOverviewTests
         AssertNoDate(row, null);
     }
 
-    private static async Task<JsonElement> GetRowAfterAGoodCheckAndAsync(ProbeResult secondResult)
+    private static async Task<JsonElement> GetRowAfterAGoodCheckFollowedByAsync(ProbeResult secondResult)
     {
         await using TestApp app = await CreateAppAsync();
         using HttpClient client = app.CreateClient();
