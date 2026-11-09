@@ -3,6 +3,10 @@ namespace DeadSwitch.Api.Monitoring;
 // Filled from the "Monitoring" section of the configuration.
 public sealed class MonitoringOptions
 {
+    // The error message in Program.cs repeats these numbers.
+    private const int MinPollIntervalSeconds = 1;
+    private const int MaxPollIntervalSeconds = 3600;
+
     public bool Enabled { get; set; } = true;
 
     // One second, because a check can only start on a poll. Every interval in whole seconds is
@@ -11,6 +15,6 @@ public sealed class MonitoringOptions
 
     public static bool HasValidPollInterval(MonitoringOptions options)
     {
-        return options.PollIntervalSeconds >= 1 && options.PollIntervalSeconds <= 3600;
+        return options.PollIntervalSeconds >= MinPollIntervalSeconds && options.PollIntervalSeconds <= MaxPollIntervalSeconds;
     }
 }

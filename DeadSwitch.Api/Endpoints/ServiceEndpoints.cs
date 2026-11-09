@@ -9,6 +9,13 @@ namespace DeadSwitch.Api.Endpoints;
 // body, services from dependency injection, and ct is cancelled if the client disconnects.
 public static class ServiceEndpoints
 {
+    // The error message for the history repeats the two limits on purpose: it is a fixed text.
+    private const int DefaultHistoryTake = 50;
+    private const int MinHistoryTake = 1;
+    private const int MaxHistoryTake = 200;
+
+    private const int CheckUrlTimeoutSeconds = 10;
+
     // {id:guid} makes a route with an id that is not a Guid return 404.
     public static void Map(WebApplication app)
     {
@@ -107,9 +114,9 @@ public static class ServiceEndpoints
         CancellationToken ct)
     {
         int offset = skip ?? 0;
-        int limit = take ?? 50;
+        int limit = take ?? DefaultHistoryTake;
 
-        if (offset < 0 || limit < 1 || limit > 200)
+        if (offset < 0 || limit < MinHistoryTake || limit > MaxHistoryTake)
         {
             return Results.Problem(statusCode: 400, detail: "skip must be nonnegative and take must be between 1 and 200.");
         }
@@ -168,7 +175,7 @@ public static class ServiceEndpoints
         // Validated here, because the probe turns a rejected URL into UNKNOWN and this route must return 400.
         UrlSafety.Validate(url);
 
-        ProbeResult result = await probe.CheckAsync(url, 10, ct);
+        ProbeResult result = await probe.CheckAsync(url, CheckUrlTimeoutSeconds, ct);
 
         return Results.Ok(new
         {
