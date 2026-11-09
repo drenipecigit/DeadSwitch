@@ -96,8 +96,8 @@ public sealed class MonitoringWorker : BackgroundService
     private async Task<List<Guid>> GetEnabledServiceIdsAsync(CancellationToken ct)
     {
         await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
-        MonitoredServiceService service = scope.ServiceProvider.GetRequiredService<MonitoredServiceService>();
-        List<MonitoredService> services = await service.GetAllAsync(ct);
+        MonitoredServiceService monitoring = scope.ServiceProvider.GetRequiredService<MonitoredServiceService>();
+        List<MonitoredService> services = await monitoring.GetAllAsync(ct);
 
         List<Guid> ids = new List<Guid>();
         foreach (MonitoredService monitoredService in services)
@@ -116,8 +116,8 @@ public sealed class MonitoringWorker : BackgroundService
         try
         {
             await using AsyncServiceScope scope = _scopes.CreateAsyncScope();
-            MonitoredServiceService service = scope.ServiceProvider.GetRequiredService<MonitoredServiceService>();
-            await service.CheckAsync(id, onlyIfDue: true, ct: ct);
+            MonitoredServiceService monitoring = scope.ServiceProvider.GetRequiredService<MonitoredServiceService>();
+            await monitoring.CheckAsync(id, onlyIfDue: true, ct: ct);
         }
         catch (CheckInProgressException)
         {

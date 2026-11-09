@@ -32,28 +32,28 @@ public static class ServiceEndpoints
 
     private static async Task<IResult> RegisterServiceAsync(
         RegisterServiceRequest request,
-        MonitoredServiceService service,
+        MonitoredServiceService monitoring,
         CancellationToken ct)
     {
-        MonitoredService created = await service.RegisterAsync(request.ToConfiguration(), ct);
+        MonitoredService created = await monitoring.RegisterAsync(request.ToConfiguration(), ct);
         return Results.Created($"/services/{created.Id}", created);
     }
 
-    private static async Task<IResult> GetAllServicesAsync(MonitoredServiceService service, CancellationToken ct)
+    private static async Task<IResult> GetAllServicesAsync(MonitoredServiceService monitoring, CancellationToken ct)
     {
-        List<MonitoredService> services = await service.GetAllAsync(ct);
+        List<MonitoredService> services = await monitoring.GetAllAsync(ct);
         return Results.Ok(services);
     }
 
-    private static async Task<IResult> GetOverviewAsync(MonitoredServiceService service, CancellationToken ct)
+    private static async Task<IResult> GetOverviewAsync(MonitoredServiceService monitoring, CancellationToken ct)
     {
-        List<ServiceOverview> overview = await service.GetOverviewAsync(ct);
+        List<ServiceOverview> overview = await monitoring.GetOverviewAsync(ct);
         return Results.Ok(overview);
     }
 
-    private static async Task<IResult> GetServiceAsync(Guid id, MonitoredServiceService service, CancellationToken ct)
+    private static async Task<IResult> GetServiceAsync(Guid id, MonitoredServiceService monitoring, CancellationToken ct)
     {
-        MonitoredService? found = await service.GetByIdAsync(id, ct);
+        MonitoredService? found = await monitoring.GetByIdAsync(id, ct);
         if (found == null)
         {
             return Results.NotFound();
@@ -65,10 +65,10 @@ public static class ServiceEndpoints
     private static async Task<IResult> UpdateServiceAsync(
         Guid id,
         UpdateServiceRequest request,
-        MonitoredServiceService service,
+        MonitoredServiceService monitoring,
         CancellationToken ct)
     {
-        MonitoredService? updated = await service.UpdateAsync(id, request.ToConfiguration(), ct);
+        MonitoredService? updated = await monitoring.UpdateAsync(id, request.ToConfiguration(), ct);
         if (updated == null)
         {
             return Results.NotFound();
@@ -77,9 +77,9 @@ public static class ServiceEndpoints
         return Results.Ok(updated);
     }
 
-    private static async Task<IResult> DeleteServiceAsync(Guid id, MonitoredServiceService service, CancellationToken ct)
+    private static async Task<IResult> DeleteServiceAsync(Guid id, MonitoredServiceService monitoring, CancellationToken ct)
     {
-        bool deleted = await service.DeleteAsync(id, ct);
+        bool deleted = await monitoring.DeleteAsync(id, ct);
         if (!deleted)
         {
             return Results.NotFound();
@@ -88,9 +88,9 @@ public static class ServiceEndpoints
         return Results.NoContent();
     }
 
-    private static async Task<IResult> CheckServiceAsync(Guid id, MonitoredServiceService service, CancellationToken ct)
+    private static async Task<IResult> CheckServiceAsync(Guid id, MonitoredServiceService monitoring, CancellationToken ct)
     {
-        CheckRecord? record = await service.CheckAsync(id, ct: ct);
+        CheckRecord? record = await monitoring.CheckAsync(id, ct: ct);
         if (record == null)
         {
             return Results.NotFound();
@@ -103,7 +103,7 @@ public static class ServiceEndpoints
         Guid id,
         int? skip,
         int? take,
-        MonitoredServiceService service,
+        MonitoredServiceService monitoring,
         CancellationToken ct)
     {
         int offset = skip ?? 0;
@@ -114,34 +114,34 @@ public static class ServiceEndpoints
             return Results.Problem(statusCode: 400, detail: "skip must be nonnegative and take must be between 1 and 200.");
         }
 
-        MonitoredService? found = await service.GetByIdAsync(id, ct);
+        MonitoredService? found = await monitoring.GetByIdAsync(id, ct);
         if (found == null)
         {
             return Results.NotFound();
         }
 
-        List<CheckRecord> history = await service.GetHistoryAsync(id, offset, limit, ct);
+        List<CheckRecord> history = await monitoring.GetHistoryAsync(id, offset, limit, ct);
         return Results.Ok(history);
     }
 
     // Compatibility with the original read-triggered checks; use POST for new clients.
     private static async Task<IResult> CheckServiceCompatibilityAsync(
         Guid id,
-        MonitoredServiceService service,
+        MonitoredServiceService monitoring,
         HttpContext context,
         CancellationToken ct)
     {
         // no-store: a cached answer would show an old status as if it were current.
         context.Response.Headers.CacheControl = "no-store";
 
-        CheckRecord? record = await service.CheckAsync(id, ct: ct);
+        CheckRecord? record = await monitoring.CheckAsync(id, ct: ct);
         if (record == null)
         {
             return Results.NotFound();
         }
 
         // The service can have been deleted right after the check, so it can be missing here.
-        MonitoredService? found = await service.GetByIdAsync(id, ct);
+        MonitoredService? found = await monitoring.GetByIdAsync(id, ct);
         string? name = null;
         if (found != null)
         {
