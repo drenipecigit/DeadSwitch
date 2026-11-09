@@ -72,6 +72,8 @@ function createRow(service) {
   row.appendChild(createTextCell(formatFailureReason(service.failureReason), "wrap-text"));
   row.appendChild(createTextCell(formatSecurityGrade(service), "no-wrap"));
   row.appendChild(createTextCell(formatHeaderDetails(service), "wrap-text"));
+  row.appendChild(createTextCell(formatCertificate(service), "no-wrap"));
+  row.appendChild(createTextCell(formatCertificateDetails(service), "wrap-text"));
 
   return row;
 }
@@ -178,6 +180,31 @@ function formatHeaderDetails(service) {
   }
 
   return service.missingSecurityHeaders;
+}
+
+// The text comes ready from the server, where its limits are tested.
+function formatCertificate(service) {
+  if (service.certificateExpiryText !== null) {
+    return service.certificateExpiryText;
+  }
+
+  if (service.certificateNotAssessedReason !== null) {
+    return "Not assessed";
+  }
+
+  return "-";
+}
+
+function formatCertificateDetails(service) {
+  if (service.certificateNotAssessedReason !== null) {
+    return service.certificateNotAssessedReason;
+  }
+
+  if (service.certificateNotAfterUtc === null) {
+    return "-";
+  }
+
+  return "Not valid after " + new Date(service.certificateNotAfterUtc).toLocaleDateString();
 }
 
 function showUpdateSucceeded() {

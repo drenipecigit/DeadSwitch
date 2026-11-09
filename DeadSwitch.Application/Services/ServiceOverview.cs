@@ -16,4 +16,8 @@ public record ServiceOverview(
     string? FailureReason,
     string? SecurityGrade,
     string? MissingSecurityHeaders,
-    string? SecurityNotAssessedReason);
+    string? SecurityNotAssessedReason,
+    DateTime? CertificateNotAfterUtc,
+    int? CertificateDaysLeft,
+    string? CertificateExpiryText,
+    string? CertificateNotAssessedReason);

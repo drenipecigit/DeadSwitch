@@ -208,6 +208,9 @@ public class DashboardJavaScriptTests
     [InlineData("service.securityGrade")]
     [InlineData("service.missingSecurityHeaders")]
     [InlineData("service.securityNotAssessedReason")]
+    [InlineData("service.certificateNotAfterUtc")]
+    [InlineData("service.certificateExpiryText")]
+    [InlineData("service.certificateNotAssessedReason")]
     public async Task TheScriptReadsEveryFieldOfTheOverview(string field)
     {
         string script = await ReadFileAsync("/dashboard.js");
@@ -244,6 +247,8 @@ public class DashboardJavaScriptTests
     [Theory]
     [InlineData("createTextCell(formatSecurityGrade(service), ")]
     [InlineData("createTextCell(formatHeaderDetails(service), ")]
+    [InlineData("createTextCell(formatCertificate(service), ")]
+    [InlineData("createTextCell(formatCertificateDetails(service), ")]
     public async Task TheSecurityCellsAreWrittenAsText(string cellCode)
     {
         string script = await ReadFileAsync("/dashboard.js");
@@ -266,6 +271,8 @@ public class DashboardJavaScriptTests
     [InlineData("return service.securityGrade;")]
     [InlineData("return service.missingSecurityHeaders;")]
     [InlineData("return service.securityNotAssessedReason;")]
+    [InlineData("return service.certificateExpiryText;")]
+    [InlineData("return service.certificateNotAssessedReason;")]
     public async Task TheSecurityCellsReturnTheValuesFromTheOverview(string returnCode)
     {
         string script = await ReadFileAsync("/dashboard.js");
@@ -273,9 +280,21 @@ public class DashboardJavaScriptTests
         Assert.Contains(returnCode, script);
     }
 
+    // The limits around expiry are tested on the server. If the script used the number it would have
+    // to make its own decisions, which no test can run.
+    [Fact]
+    public async Task TheScriptDoesNotUseTheNumberOfDays()
+    {
+        string script = await ReadFileAsync("/dashboard.js");
+
+        Assert.DoesNotContain("certificateDaysLeft", script);
+    }
+
     [Theory]
     [InlineData("Security grade")]
     [InlineData("Header details")]
+    [InlineData("Certificate")]
+    [InlineData("Certificate details")]
     public async Task ThePageHasTheSecurityColumns(string heading)
     {
         string page = await ReadFileAsync("/");
@@ -293,7 +312,7 @@ public class DashboardJavaScriptTests
         int headings = Regex.Matches(page, "<th scope=\"col\">").Count;
         int cells = Regex.Matches(script, @"row\.appendChild\(").Count;
 
-        Assert.Equal(9, headings);
+        Assert.Equal(11, headings);
         Assert.Equal(headings, cells);
     }
 

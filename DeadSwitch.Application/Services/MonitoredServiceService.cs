@@ -65,6 +65,10 @@ public class MonitoredServiceService
             string? securityGrade = null;
             string? missingSecurityHeaders = null;
             string? securityNotAssessedReason = null;
+            DateTime? certificateNotAfterUtc = null;
+            int? certificateDaysLeft = null;
+            string? certificateExpiryText = null;
+            string? certificateNotAssessedReason = null;
 
             // A new URL empties LastCheckedAt but keeps the history. Without this check the row would
             // show the response time of the old address, also after changing back to an earlier URL.
@@ -78,6 +82,19 @@ public class MonitoredServiceService
                     securityGrade = latest[0].SecurityGrade;
                     missingSecurityHeaders = latest[0].MissingSecurityHeaders;
                     securityNotAssessedReason = latest[0].SecurityNotAssessedReason;
+
+                    // Only the newest check counts: an older date must never be shown after a check
+                    // that saw no valid certificate. The days are counted from now and not from the
+                    // check, so a certificate can expire while no checks are running.
+                    certificateNotAfterUtc = latest[0].CertificateNotAfterUtc;
+                    certificateNotAssessedReason = latest[0].CertificateNotAssessedReason;
+
+                    if (certificateNotAfterUtc.HasValue)
+                    {
+                        int daysLeft = CertificateExpiryRule.DaysLeft(certificateNotAfterUtc.Value, _clock.GetUtcNow());
+                        certificateDaysLeft = daysLeft;
+                        certificateExpiryText = CertificateExpiryRule.TextFor(daysLeft);
+                    }
                 }
             }
 
@@ -95,7 +112,11 @@ public class MonitoredServiceService
                 FailureReason: failureReason,
                 SecurityGrade: securityGrade,
                 MissingSecurityHeaders: missingSecurityHeaders,
-                SecurityNotAssessedReason: securityNotAssessedReason));
+                SecurityNotAssessedReason: securityNotAssessedReason,
+                CertificateNotAfterUtc: certificateNotAfterUtc,
+                CertificateDaysLeft: certificateDaysLeft,
+                CertificateExpiryText: certificateExpiryText,
+                CertificateNotAssessedReason: certificateNotAssessedReason));
         }
 
         return overview;
