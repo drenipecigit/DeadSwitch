@@ -10,8 +10,8 @@ DeadSwitch is a personal uptime monitor. The backend is **not finished**: see th
 
 | Project | Contains | References |
 |---|---|---|
-| `DeadSwitch.Domain` | `MonitoredService`, `CheckRecord`, `ServiceStatus`, `StatusChangeRule`, `SecurityHeaderRule`, `CertificateExpiryRule` | nothing |
-| `DeadSwitch.Application` | `MonitoredServiceService`, `ServiceOverview`, `ServiceConfiguration`, `UrlSafety`, `ServiceLocks`, `ServiceValidationException`, `CheckInProgressException`, `NotificationFailedException`, `StatusChange`, `SecurityHeaderCheck`, `CertificateCheck`, interfaces including `INotifier` | Domain |
+| `DeadSwitch.Domain` | `MonitoredService`, `CheckRecord`, `ServiceStatus`, `StatusChangeRule`, `SecurityHeaderRule`, `CertificateExpiryRule`, `CertificateWarningRule`, `CertificateFinding`, `CertificateReasons` | nothing |
+| `DeadSwitch.Application` | `MonitoredServiceService`, `ServiceOverview`, `ServiceConfiguration`, `UrlSafety`, `ServiceLocks`, `ServiceValidationException`, `CheckInProgressException`, `NotificationFailedException`, `StatusChange`, `SecurityHeaderCheck`, `CertificateCheck`, `SecurityWarning`, `SecurityWarningFinder`, `SecurityWarningSettings`, interfaces including `INotifier` | Domain |
 | `DeadSwitch.Infrastructure` | `DeadSwitchDbContext`, repository, `HttpHealthProbe`, `SecurityHeaderReader`, `TlsHandshakeRecorder`, `TlsHandshake`, `ProtectedHttpHandler`, `PublicInternetConnector`, `DestinationBlockedException`, `DiscordNotifier`, `DiscordMessage`, `DiscordOptions`, `DiscordWebhookUrl`, migrations | Application, Domain |
 | `DeadSwitch.Api` | Startup in `Program.cs`, `ServiceEndpoints`, `RegisterServiceRequest`, `UpdateServiceRequest`, `UtcDateTimeOffsetConverter`, `MonitoringWorker`, `SecurityHeaders`, `CrossSiteRequests`, `LocalOnlyCheck`, and the dashboard in `wwwroot` | Application, Domain, Infrastructure |
 | `DeadSwitch.Tests` | Automated tests | Api, and the other projects through it |
@@ -84,6 +84,7 @@ A `404` has an empty body. A host name that is not allowed gets a `400` from the
 | Key | Environment variable | Meaning |
 |---|---|---|
 | `Discord:WebhookUrl` | `Discord__WebhookUrl` | The Discord webhook address. A secret: set it with `dotnet user-secrets` in Development, or as an environment variable elsewhere. Never in `appsettings.json` or git. Empty or missing turns notifications off |
+| `SecurityWarnings:CertificateWarningDays` | `SecurityWarnings__CertificateWarningDays` | Warn when this many days or fewer are left of a certificate. Default 14, allowed 1 to 365. Another value stops the application at startup |
 
 **Setting the secret in Windows PowerShell 5.1.** `Read-Host` does not work inside a pasted block, because the next pasted line becomes its answer. The method that worked was to copy the webhook address and run one line that reads the clipboard, writes `secrets.json` as UTF-8 without a BOM and then empties the clipboard. The address never appears in the command, so it stays out of the PowerShell history. The folder name is the `UserSecretsId` in `DeadSwitch.Api.csproj`. The line replaces the file, so any other secret in it is lost. The two lines below are written from that method and have not been run in exactly this form.
 
@@ -122,6 +123,8 @@ The application does not run migrations at startup. Run `dotnet ef database upda
 
 Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, so old rows did not need rewriting.
 
+`feat/security-warnings` needed no migration: a warning is worked out from the rows already in `CheckRecords`, and the existing index on the service and the time fits the new queries. The price is one or two extra reads for each check with an assessment. Proven by `ModelMatchesTheMigrations`, by `dotnet ef migrations has-pending-model-changes` and by no change in the `Migrations` folder. A future cleanup of the history must keep the newest assessed row of each kind, or the next check starts over without a baseline.
+
 `fix/api-contract` needed no migration. Marking a time read from the database as UTC does not change the column or the saved text. This is proven by `ModelMatchesTheMigrations`, by `dotnet ef migrations has-pending-model-changes`, by no change in the `Migrations` folder, and by tests that read the saved text directly.
 
 ## Latest verified result
@@ -129,13 +132,14 @@ Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, s
 Date: 2026-11-09.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
-- `dotnet test DeadSwitch.slnx`: 1015 passed, 0 failed, on the final code.
+- `dotnet test DeadSwitch.slnx`: 1221 passed, 0 failed, on the final code.
+- 206 of the tests come from the security warnings: 8 test the header comparison, 52 the certificate rule, 16 the baseline queries against SQLite, 70 the whole flow through the API and the database with a fake probe and a fake notifier, 1 the threshold time read back from the database, 10 failures and shutdown, 1 a real shutdown of the loop, 34 the real notifier with a stub, and 14 the setting. No automated test reaches a real website or Discord.
 - 118 of the tests come from the TLS certificate: 23 test the recorder directly, 9 use the real connector and handler over HTTPS on `127.0.0.1`, 28 use the real probe with a stand-in for the network, 12 use the real probe over real TLS with a local connection step, 6 use the API and the database, 15 test the expiry rule, 12 test the overview, 10 read the dashboard's files as text, 1 tests the migration and 2 test the registered handler. No automated test reaches a real website.
 - 76 of the tests come from the security headers: 27 test the reader directly, 9 use the real handler against a local server on `127.0.0.1`, 8 use the real probe with a stand-in for the network, 9 use the API with a fake or scripted probe, 7 test the rule, 15 read the dashboard's files as text, and 1 tests the migration. No automated test reaches a real website.
 - 198 of the tests come from phase 5: 14 test the overview route, 37 the files and the headers, 51 read the dashboard's files as text, 70 test cross-site requests and host names, and 26 test the local-only check. No test runs the JavaScript.
 - 470 of the tests come from phase 1: 162 only classify URLs and IP addresses, 17 run the real connection code against a local server, 16 test the probe with a stub handler, 11 run the real probe and handler with a fake DNS, 7 test `ServiceLocks` directly, 134 test unusual host names through the API, the worker and the real probe with a fake probe or a fake DNS, and 123 use the API, the worker or the migrations with a fake probe and an in-memory database.
 - 153 come from phase 2: 60 classify webhook addresses, 12 test the rule directly, 29 test the real notifier with a stub handler, 2 test the registered handler against a local server, 13 run the real registration with a stub handler, 36 use the API, the worker or the migrations with a fake notifier, and 1 reads the settings files.
-- Without the 68 tests that carry the trait `NameLookupWithoutConnector`: 947 passed.
+- Without the 68 tests that carry the trait `NameLookupWithoutConnector`: 1153 passed.
 - No test sends anything to Discord. Real messages are confirmed by the owner's run; see "Manual run".
 
 ### Readability changes without new behaviour
@@ -169,6 +173,114 @@ A certificate is only visible during a handshake, so a reused connection has not
 `ConnectionClose` was chosen because it keeps one handler and only affects the probe. This is local CPU time and says nothing about the network. The memory figure covers the whole process, the local server included. The measuring code was removed and never committed.
 
 In the same run, `Uri.IdnHost` and `SslStream.TargetHostName` held the same text for an IPv4 address, an IPv6 address, an ordinary name, upper case, a trailing dot and an IDN name.
+
+### Red runs of the security warnings
+
+The new tests cannot compile against the old code, because the types do not exist. They therefore ran against a version with the signatures in place and the old behaviour: no warning is ever found, the rules answer nothing, the message is empty and the setting is 0.
+
+| Tests | Failed | Could not be red |
+|---|---|---|
+| The certificate rule, 52 rows | 28 | 24 expect "not looked at", no threshold or no warning |
+| The header comparison, 8 tests | 4 | 4 expect nothing to have disappeared |
+| The baseline queries, 16 rows | 8 | 8 expect no baseline |
+| The flow for headers, 33 tests | 18 | 15 expect no warning |
+| The flow for the certificate, 33 tests | 26 | 7 expect no warning |
+| Failures and shutdown, 10 tests | 8 | 2 expect nothing to be sent or the next service to be checked |
+| A real shutdown of the loop, 1 test | 1 | |
+| The real notifier, 34 tests | 32 | 2 expect nothing to be sent without an address |
+| The setting, 14 tests | 9 | 5 hold with the old behaviour too |
+
+Together 134 of the first 201 tests failed, and all 1015 older tests passed. The tests that could not be red are proven by the mutations below. The status messages' test for line separators ran red against the real, unchanged cleaning.
+
+Five tests were added after this run. `ChangingToAnotherUrlAndBackWithoutACheck...`, two of them, were added when planning the mutations. Their red run is the rows for the `LastCheckedAt` guard. `ChangingBackAfterOnlyTimeouts...`, two of them, were added because the first mutation run found a gap. Their red run is the rows for the `Url` condition.
+
+`PassingTheFourteenDayLimitFollowedBySeveralChecksWithinAnHourWarnsOnce` could not be red: the code was already right, because `DeadSwitchDbContext` marks both times as UTC when they are read. A printout from a real read through `GetCertificateBaselineAsync`, on a machine at UTC+1, gave `Kind` `Utc` on both fields, and `+00:00` from `new DateTimeOffset(...)`. The proof that the test works is the three mutations at the end of the table below. The test also checks `Kind` directly, because a machine running in UTC would not notice local time in the count.
+
+### Mutation check of the security warnings
+
+The code was broken on purpose, one change at a time, running all tests and restoring the file from a copy outside the repository. The sha256 of every file was compared after every restore, and all matched. The changes were never committed. All of them ran against a fake probe, a fake notifier or a stub handler, and none touched `ConnectCallback` or `PublicInternetConnector`. The table shows the final result. The rows for the `Url` condition first gave 0, and were run again after their tests were added. Only tests changed between the two runs.
+
+| Change | Failing tests |
+|---|---|
+| Header baseline also takes rows that were not assessed | 10 |
+| Header baseline: the Url condition removed | 1 |
+| Certificate baseline: the Url condition removed | 1 |
+| OnlyIfSameUrl does not compare the URL | 3 |
+| Header baseline takes the oldest row | 6 |
+| Certificate baseline takes the oldest row | 11 |
+| Certificate baseline loses Rejected | 6 |
+| Certificate baseline also takes NotSeen | 2 |
+| Certificate baseline matches with StartsWith | 2 |
+| Certificate baseline takes any reason | 8 |
+| LastCheckedAt guard removed for headers | 1 |
+| LastCheckedAt guard removed for the certificate | 1 |
+| Certificate rule only runs when headers were assessed | 26 |
+| Header rule runs without an assessment | 21 |
+| NotSeen goes through the certificate rule as a verdict | 5 |
+| First check with few days left does not warn | 6 |
+| Previous threshold counted from the new check | 2 |
+| Threshold counted from now | 4 |
+| The setting is ignored | 2 |
+| The URL is used as the name of the warning | 3 |
+| Rejected warning is never returned | 10 |
+| A Rejected check also goes on to the expiry rule | 17 |
+| Every rejected check warns | 12 |
+| Timeout and unknown text count as Rejected | 21 |
+| NotSeen counts as Rejected | 4 |
+| Classify ignores case for Rejected | 2 |
+| Classify uses StartsWith for Rejected | 4 |
+| A date no longer wins over a reason | 4 |
+| First threshold one day lower | 7 |
+| First threshold one day higher | 7 |
+| Last threshold one day lower | 4 |
+| Last threshold one day higher | 3 |
+| Second threshold one day lower | 2 |
+| Second threshold one day higher | 2 |
+| Second threshold also used below the setting | 2 |
+| The same threshold warns again | 9 |
+| A better threshold warns too | 1 |
+| A first threshold does not count | 21 |
+| Every missing header warns at every check | 5 |
+| A header that comes back warns | 35 |
+| Parts of a name count | 1 |
+| Saved text is passed on instead of the fixed list | 7 |
+| Warnings sent before the save | 4 |
+| Warnings sent inside the lock | 2 |
+| Warnings looked for after the save | 56 |
+| Warnings looked for after LastCheckedAt is set | 2 |
+| Warning sent before the status message | 1 |
+| No try/catch around a warning | 5 |
+| Only the first warning is sent | 3 |
+| The finder inside a try/catch that swallows a shutdown | 1 |
+| The finder does not get the token | 0 |
+| ThrowIfCancellationRequested between the warnings | 2 |
+| The worker's token reaches the sending | 1 |
+| The exception object goes to the logger | 1 |
+| An unexpected exception's text is logged | 1 |
+| The expected failure's text is not logged | 2 |
+| parse holds everyone | 10 |
+| The name skips FormatAsCode | 24 |
+| The name is not cut | 2 |
+| A date in the warning | 8 |
+| The service id in the warning | 8 |
+| Line separator is not cleaned | 2 |
+| Paragraph separator is not cleaned | 2 |
+| Format characters are not cleaned | 6 |
+| Wrong text for one day | 1 |
+| Rejected text changed | 1 |
+| Header names are separated differently | 3 |
+| NotValid text changed | 1 |
+| NoNewHandshake text changed | 1 |
+| Default becomes 15 | 4 |
+| Lower limit becomes 0 | 2 |
+| Upper limit becomes 366 | 2 |
+| Validate removed | 3 |
+| The wrong configuration section is read | 6 |
+| CheckedAtUtc is not marked as UTC when read | 5, including the time test |
+| CertificateNotAfterUtc is not marked as UTC when read | 3, including the time test |
+| The check time is read as local time in the finder | 1, the time test |
+
+The row with 0 failing tests stays on purpose. Without its token the baseline read is not cancelled at once, but `SaveCheckAsync` gets the same token right after it, so nothing is saved and nothing is sent. The difference is only one read that finishes, and a test of it would show how the code is written and not how it behaves.
 
 ### Red runs of the TLS certificate
 
@@ -830,6 +942,13 @@ This is one run in one browser, against sites whose certificates can change.
 
 ### Not run manually
 
+Security warnings, proven by tests only until the owner's manual run:
+
+- Any real warning in Discord, and the worker running with Discord turned on.
+- A header that really disappears, and a certificate that goes from accepted to rejected on a real site, cannot be provoked. The manual run uses rows changed by hand in a separate database, so it proves the chain from the worker to Discord but not the event itself.
+- How Discord shows a line separator or an invisible character. The tests prove what is sent.
+- A restart in the tests is a new worker against the same database, and not a new process.
+
 TLS certificate, not confirmed in the owner's run:
 
 - `Expired` on the screen. A real run would need a date that has passed in the database.
@@ -933,6 +1052,16 @@ The automated tests still cover a redirect in two separate parts, because `UrlSa
 - The overview takes the certificate from the newest check only, and the limits -1, 0 and 1 give the right text with a fake clock.
 - Nothing from a certificate reaches an answer, the log or a notification, with a hostile subject.
 
+- A header that disappears gives one warning with its name, compared with the newest assessed check of the same URL. A timeout, a connection failure, a blocked address, a redirect or an error in between neither warns nor changes the comparison.
+- A certificate gives one warning when it goes from accepted to rejected. "Not seen", a timeout and an unknown reason text are kept apart from a rejected certificate, give no warning and do not become a baseline. The baseline query agrees with `Classify` for every case.
+- Headers and certificate are judged separately: a redirect, 4xx or 5xx with a valid certificate moves only the certificate baseline.
+- A certificate warns once at each threshold, also at a first check, and a renewed certificate starts over. Passing the 14 day limit followed by checks within an hour gives one warning, and the times read back are marked as UTC.
+- 4 timeouts of 14 against a rejected certificate give one warning, and 1 of 34 against a good site gives none.
+- A new worker neither repeats nor misses a warning. A new URL has no baseline, also when changing back to an earlier URL.
+- A warning is sent after the save and outside the lock, after the status message. A failed send keeps the check, is logged, and does not stop the next warning or service.
+- A shutdown before the save saves and sends nothing, and ends the real loop without an error. A shutdown during the sending still sends every warning of the saved check.
+- What is sent: only the service's name and fixed texts, no URL and no date, with the name as inline code and every ping turned off.
+
 Dependency injection lifetimes were reviewed by reading the code only.
 
 ## MVP status
@@ -951,8 +1080,9 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | `INotifier` with a Discord webhook | Done | Proven by tests, and confirmed by a manual run against a real channel. A wrong token from Discord and notifications turned off have not been run manually with a real send |
 | Webhook address outside git | Done | Proven by tests of the settings files and the log. A manual run confirms the secret is read, and that the log holds no address after a real send |
 | Dashboard (phase 5, not part of the MVP) | Done | The server side is proven by tests and a run against the real server, and the page by the owner's run in Chrome. Step D (`eval`) and the visible failure message are not confirmed on the screen |
-| Security headers with a grade, saved per check | Done | Proven by tests and by the owner's run against real websites in Chrome. Not tested: old rows in a real upgraded database, and whether a grade is fair for the values. The warning when a header disappears comes in task 3 |
-| Certificate expiry saved per check, days left on the dashboard | Done | Proven by tests against a local server and by the owner's run against real websites in Chrome. Not confirmed manually: `Expired` on the screen, revocation, and the worker with Discord turned on. The cause of the timeouts in that run has not been established. The warning when few days remain comes in task 3 |
+| Security headers with a grade, saved per check | Done | Proven by tests and by the owner's run against real websites in Chrome. Not tested: old rows in a real upgraded database, and whether a grade is fair for the values |
+| Certificate expiry saved per check, days left on the dashboard | Done | Proven by tests against a local server and by the owner's run against real websites in Chrome. Not confirmed manually: `Expired` on the screen, revocation, and the worker with Discord turned on. The cause of the timeouts in that run has not been established |
+| Warnings when security gets worse | Built, manual run remaining | Proven by tests with a fake probe, a fake notifier and a stub. Real messages in Discord wait for the owner's manual run; see "Not run manually" |
 | README | Missing | |
 | GitHub Actions | Missing | Waits for the owner's approval |
 
@@ -969,6 +1099,41 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | Nothing: a new service or a new URL | DOWN | Yes | A misspelled URL that is down from its first check would otherwise never give an alarm |
 | Nothing: a new service or a new URL | UP | No | Nothing to warn about |
 | Nothing: a new service or a new URL | UNKNOWN | No | The status stays empty |
+
+## Security warning rules
+
+Worker and manual checks share `CheckAsync`, so they behave the same. `GET /check` saves nothing and never warns. A warning is worked out from the rows in `CheckRecords` and nothing is kept in memory. A row counts only if it belongs to the service's current URL.
+
+Headers, compared with the newest assessed check:
+
+| Baseline | This check | Warning |
+|---|---|---|
+| None: a new service or URL | Assessed | No |
+| Header present | Assessed, header missing | Yes, one |
+| Header missing | Assessed, header missing | No |
+| Header missing | Assessed, header present | No |
+| Any | Not assessed | No, and the baseline stays |
+
+What a check says about the certificate, read by `CertificateWarningRule.Classify`:
+
+| Finding | Saved fields | Baseline |
+|---|---|---|
+| `Valid` | A date | Yes |
+| `Rejected` | The exact text `The certificate was not valid.` | Yes |
+| `NotSeen` | The exact text `No new TLS handshake for this check.` | No |
+| `NotLookedAt` | Everything else: a timeout, a connection failure, `http`, an old row, an unknown text | No |
+
+| Baseline | This check | Warning |
+|---|---|---|
+| None | `Rejected` | No. The DOWN message comes anyway |
+| `Valid` | `Rejected` | Yes |
+| `Rejected` | `Rejected` | No |
+| None or `Rejected` | `Valid` within a threshold | Yes, one |
+| `Valid` | `Valid` at a worse threshold | Yes, one |
+| `Valid` | `Valid` at the same threshold or none | No |
+| Any | `NotSeen` or `NotLookedAt` | No, and the baseline stays |
+
+The thresholds are the setting (default 14) and then 7 and 1, each used only if it is below the setting. Having that many days or fewer left counts, and `DaysLeft` gives the same number as the dashboard. A first check inside a threshold warns because it is a fact about the certificate, and otherwise the next warning would come at the last threshold. An expired certificate is refused by TLS and is covered by `Rejected`.
 
 ## Status rules
 
@@ -1004,7 +1169,14 @@ Check records saved before this rule keep their old status: an earlier 3xx stays
 - A value in a status column other than `UP`, `DOWN` or `UNKNOWN` makes reading that row fail. The application only writes these three, so this needs a manual edit of the database.
 - A notification that fails, or a crash between the save and the send, loses that alarm. There is no retry, and the status will not change again until the service does.
 - A 429 from Discord is logged but not waited out. How rate limits work for webhooks has not been read or tested.
-- A service that keeps switching gives one message per change, and one timeout is enough for a DOWN message.
+- A service that keeps switching gives one message per change, and one timeout is enough for a DOWN message. The security warnings do not change this: a timeout gives no warning, but it still gives DOWN and UP messages.
+- A site that switches between an accepted and a rejected certificate warns at every change to rejected, and there is no limit over time. If it then becomes accepted with few days left, an expiry warning comes as well, because a rejected certificate has no date to compare with.
+- A site that switches its headers, such as a CDN with several versions, gives one warning per change. One assessed response is enough.
+- A security warning that fails, or a crash between the save and the send, loses that warning. The next check sees no change. An expiring certificate gets a new chance at the next threshold, and a missing header only when it has come back and disappeared again. The dashboard shows the current state all the time.
+- During a Discord outage a check can take up to 15 seconds longer: a status message and two warnings, 5 seconds each. A shutdown waits for the same sending. This is calculated from the timeout and has not been measured against the host's own limit.
+- Raising the setting also applies to the earlier row, so no warning comes at once. The next threshold warns as usual.
+- After changing to another URL and back with no check in between, followed by a timeout, the next assessed check is compared with the old rows of that URL. The comparison is correct, but it does not count as a first check.
+- The reasons in `CertificateReasons` are read back from saved rows, so changing a text there makes old rows count as unknown.
 - Two checks shortly after each other could in theory send their messages in the wrong order, because they are sent outside the lock.
 - A status change can make a manual check answer up to 5 seconds later. During a Discord outage, many changes delay a worker pass by up to 5 seconds per service.
 - A name that starts to point to a private address gives UNKNOWN, which is only seen in the log. It could be worth a notification of its own in phase 3.
@@ -1094,6 +1266,12 @@ Checked against Discord's documentation, on the webhook and message pages only:
 - The `/slack` and `/github` variants exist, which is why the address rule rejects them.
 - The pages say nothing about `/api/` in the path or about rate limits. The manual run confirms that a real address under `/api/webhooks/` on `discord.com` works. Rate limits remain unread and untested.
 
+The security warnings:
+- A warning holds only the service's name and our own fixed texts. The type `SecurityWarning` has no field for anything a monitored site has written: the header names come from the fixed list in `SecurityHeaderRule`, the number of days is one of our own thresholds, and no URL, date or number of days left is sent.
+- The name goes through the same cleaning as in a status message: cut at 100 characters, a backtick replaced, and written as inline code, which stops links and previews. The empty `parse` turns off every ping whatever the formatting.
+- That cleaning now also replaces line separators, paragraph separators and invisible format characters, which `char.IsControl` misses. This applies to status messages as well. A joined emoji loses its joiner.
+- There is no new way out: warnings use the existing Discord client and its protected handler.
+
 The dashboard:
 
 It only reads. There is no login, so a button would give anyone on the machine an easier way to change data, and writing from a page needs a CSRF protection that belongs with the login. With one `fetch` that only reads, a test can also show that the script does not write.
@@ -1147,7 +1325,7 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes early so that every new feature is visible in it at once. The MVP still covers phases 1 to 4; the dashboard is built earlier but is not part of the MVP. Each task is one branch, with a plan approved first.
 
-**Next step:** the manual test of `feat/tls-certificate` is approved, and the owner reviews and merges it. After that comes `feat/security-warnings`, with a plan approved first; see "Phase 3: Security checks".
+**Next step:** the owner runs the manual test of `feat/security-warnings`, then reviews and merges it. A single timeout still giving DOWN and UP messages is a task of its own later.
 
 ### Phase 1: Stable foundation
 
@@ -1179,7 +1357,7 @@ Built on `feat/dashboard` and merged. The server side is verified by tests, and 
 
 ### Phase 3: Security checks
 
-- TLS certificates: read the expiry date on each check, save it, and warn when fewer than a configurable number of days remain (default 14).
+- TLS certificates: read the expiry date on each check, save it, and warn when a configurable number of days or fewer remain (default 14).
 - Security headers: check `Strict-Transport-Security`, `Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options` and `Referrer-Policy`. Give each service a simple grade and save which headers are missing.
 - Warn when a certificate is about to expire, or when a header has disappeared since the previous check.
 - All network traffic goes through the same SSRF protection as the health check. No new ways out.
