@@ -3,8 +3,12 @@ using Microsoft.EntityFrameworkCore;
 
 namespace DeadSwitch.Infrastructure.Data;
 
-public class DeadSwitchDbContext(DbContextOptions<DeadSwitchDbContext> options) : DbContext(options)
+public class DeadSwitchDbContext : DbContext
 {
+    public DeadSwitchDbContext(DbContextOptions<DeadSwitchDbContext> options) : base(options)
+    {
+    }
+
     // Set<T>() asks EF Core for the table, so these properties need no setter of their own.
     public DbSet<MonitoredService> MonitoredServices => Set<MonitoredService>();
     public DbSet<CheckRecord> CheckRecords => Set<CheckRecord>();
