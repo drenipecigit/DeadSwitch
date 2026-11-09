@@ -10,9 +10,9 @@ DeadSwitch is a personal uptime monitor. The backend is **not finished**: see th
 
 | Project | Contains | References |
 |---|---|---|
-| `DeadSwitch.Domain` | `MonitoredService`, `CheckRecord`, `ServiceStatus`, `StatusChangeRule` | nothing |
-| `DeadSwitch.Application` | `MonitoredServiceService`, `ServiceOverview`, `ServiceConfiguration`, `UrlSafety`, `ServiceLocks`, `ServiceValidationException`, `CheckInProgressException`, `NotificationFailedException`, `StatusChange`, interfaces including `INotifier` | Domain |
-| `DeadSwitch.Infrastructure` | `DeadSwitchDbContext`, repository, `HttpHealthProbe`, `ProtectedHttpHandler`, `PublicInternetConnector`, `DestinationBlockedException`, `DiscordNotifier`, `DiscordMessage`, `DiscordOptions`, `DiscordWebhookUrl`, migrations | Application, Domain |
+| `DeadSwitch.Domain` | `MonitoredService`, `CheckRecord`, `ServiceStatus`, `StatusChangeRule`, `SecurityHeaderRule` | nothing |
+| `DeadSwitch.Application` | `MonitoredServiceService`, `ServiceOverview`, `ServiceConfiguration`, `UrlSafety`, `ServiceLocks`, `ServiceValidationException`, `CheckInProgressException`, `NotificationFailedException`, `StatusChange`, `SecurityHeaderCheck`, interfaces including `INotifier` | Domain |
+| `DeadSwitch.Infrastructure` | `DeadSwitchDbContext`, repository, `HttpHealthProbe`, `SecurityHeaderReader`, `ProtectedHttpHandler`, `PublicInternetConnector`, `DestinationBlockedException`, `DiscordNotifier`, `DiscordMessage`, `DiscordOptions`, `DiscordWebhookUrl`, migrations | Application, Domain |
 | `DeadSwitch.Api` | Startup in `Program.cs`, `ServiceEndpoints`, `RegisterServiceRequest`, `UpdateServiceRequest`, `UtcDateTimeOffsetConverter`, `MonitoringWorker`, `SecurityHeaders`, `CrossSiteRequests`, `LocalOnlyCheck`, and the dashboard in `wwwroot` | Application, Domain, Infrastructure |
 | `DeadSwitch.Tests` | Automated tests | Api, and the other projects through it |
 
@@ -53,7 +53,16 @@ DeadSwitch is a personal uptime monitor. The backend is **not finished**: see th
 
 A `404` has an empty body. A host name that is not allowed gets a `400` from the framework's own host filter, which does not use this format.
 
-**`GET /services/overview`.** Each row has `id`, `name`, `url`, `currentStatus`, `lastKnownStatus`, `lastCheckedAt`, `isEnabled`, `responseTimeMs` and `failureReason`. The last two come from the newest check record, and are null when `lastCheckedAt` is null. That condition matters: a new URL empties `lastCheckedAt` but keeps the history, so without it a row would show the response time of the old address, also after changing back to an earlier URL.
+**Security headers of a check.** A check record, and so `POST /services/{id}/check` and the history, has three more fields. `GET /check` and `GET /services/{id}/check` are unchanged.
+
+| Case | `securityGrade` | `missingSecurityHeaders` | `securityNotAssessedReason` |
+|---|---|---|---|
+| Assessed, something is missing | `B`, `C`, `D` or `F` | The names, separated by `, ` | null |
+| Assessed, nothing is missing | `A` | An empty text | null |
+| Not assessed | null | null | `Not an HTTPS address.`, `The response was a redirect.` or `The response was not a success.` |
+| No response, or a record older than this feature | null | null | null |
+
+**`GET /services/overview`.** Each row has `id`, `name`, `url`, `currentStatus`, `lastKnownStatus`, `lastCheckedAt`, `isEnabled`, `responseTimeMs`, `failureReason`, `securityGrade`, `missingSecurityHeaders` and `securityNotAssessedReason`. The values from `responseTimeMs` and on come from the newest check record, and are null when `lastCheckedAt` is null. That condition matters: a new URL empties `lastCheckedAt` but keeps the history, so without it a row would show the response time of the old address, also after changing back to an earlier URL.
 
 **Security headers.** Every answer from the application has the headers listed under "The dashboard" in the security notes, JSON and errors included.
 
@@ -95,6 +104,7 @@ dotnet run --project DeadSwitch.Api --launch-profile http -- --Discord:WebhookUr
 | `AddMonitoringHistoryAndScheduling` | Adds `IntervalSeconds`, `TimeoutSeconds` and `IsEnabled`, and creates `CheckRecords` with cascade delete. Existing rows stay paused because `IsEnabled` defaults to false |
 | `MakeCurrentStatusRequired` | Makes `CurrentStatus` NOT NULL with the default `UNKNOWN`. Rows with NULL become `UNKNOWN`, other values and all check records are kept. SQLite rebuilds the table for this, with foreign keys turned off around the drop so that the cascade does not delete the history |
 | `AddLastKnownStatusToMonitoredService` | Adds the nullable `LastKnownStatus` and copies `CurrentStatus` into it where that is `UP` or `DOWN`, so that an existing service does not lose its next change. `UNKNOWN` stays NULL. `CurrentStatus` cannot do this job: after UP, UNKNOWN, DOWN it no longer remembers that the service was up |
+| `AddSecurityHeadersToCheckRecords` | Adds the nullable text columns `SecurityGrade`, `MissingSecurityHeaders` and `SecurityNotAssessedReason` to `CheckRecords`. Existing rows get NULL, which means that nothing was assessed. No data is rewritten |
 
 The application does not run migrations at startup. Run `dotnet ef database update` when setting up a database, and after pulling a new migration: without it, reading a service fails because the column is missing. `MakeCurrentStatusRequired` has run in the tests and from empty against a separate database file, but not against the local development database. Run the command there as well.
 
@@ -104,15 +114,88 @@ Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, s
 
 ## Latest verified result
 
-Date: 2026-11-05.
+Date: 2026-11-09.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
-- `dotnet test DeadSwitch.slnx`: 821 passed, 0 failed, on the final code. Five runs in a row.
+- `dotnet test DeadSwitch.slnx`: 897 passed, 0 failed, on the final code.
+- 76 of the tests come from the security headers: 27 test the reader directly, 9 use the real handler against a local server on `127.0.0.1`, 8 use the real probe with a stand-in for the network, 9 use the API with a fake or scripted probe, 7 test the rule, 15 read the dashboard's files as text, and 1 tests the migration. No automated test reaches a real website.
 - 198 of the tests come from phase 5: 14 test the overview route, 37 the files and the headers, 51 read the dashboard's files as text, 70 test cross-site requests and host names, and 26 test the local-only check. No test runs the JavaScript.
 - 470 of the tests come from phase 1: 162 only classify URLs and IP addresses, 17 run the real connection code against a local server, 16 test the probe with a stub handler, 11 run the real probe and handler with a fake DNS, 7 test `ServiceLocks` directly, 134 test unusual host names through the API, the worker and the real probe with a fake probe or a fake DNS, and 123 use the API, the worker or the migrations with a fake probe and an in-memory database.
 - 153 come from phase 2: 60 classify webhook addresses, 12 test the rule directly, 29 test the real notifier with a stub handler, 2 test the registered handler against a local server, 13 run the real registration with a stub handler, 36 use the API, the worker or the migrations with a fake notifier, and 1 reads the settings files.
 - Without the 68 tests that carry the trait `NameLookupWithoutConnector`: 753 passed.
 - No test sends anything to Discord. Real messages are confirmed by the owner's run; see "Manual run".
+
+### Red runs of the security headers
+
+Each group ran before the real code was written, with the columns and the migration in place, `GradeFor` always `F`, an empty header list, a reader that assesses nothing, a probe that does not call it, and a dashboard without the new parts.
+
+| Tests | Failed | Could not be red |
+|---|---|---|
+| The reader, 27 tests | 27 | |
+| The rule, 7 tests | 5 | 2 rows expect `F` |
+| The real handler, 9 tests | 6 | 3 describe the framework: where the CSP header lands, and the header limit |
+| The real probe with a stand-in, 8 tests | 4 | 4 expect nothing when there was no response |
+| The API and the database, 9 tests | 4 | 5 expect empty fields |
+| The dashboard's files as text, 12 tests | 12 | |
+| The migration, 1 test | 0 | The migration had to exist for the other tests to run. It is proven by the mutation below |
+
+Three later dashboard tests were added after the first mutation run, because of the row "The reason is shown as a dash" below. Their red run is that mutation.
+
+### Mutation check of the security headers
+
+The code was broken on purpose, one change at a time, running all tests and restoring the file from a copy. The changes were never committed. All of them ran against a stand-in for the network, a fake probe or `127.0.0.1`. None of them touched `ConnectCallback` or `PublicInternetConnector`.
+
+| Change | Failing tests |
+|---|---|
+| Grade A for one missing header | 16 |
+| The branch for grade B removed | 16 |
+| The branch for grade C removed | 1 |
+| The branch for grade D removed | 1 |
+| Grade F becomes D | 3 |
+| `Strict-Transport-Security` removed from the list | 4 |
+| `Content-Security-Policy` removed from the list | 4 |
+| `X-Content-Type-Options` removed from the list | 4 |
+| `X-Frame-Options` removed from the list | 8 |
+| `Referrer-Policy` removed from the list | 5 |
+| The separator changed | 1 |
+| Every value counts as present, also an empty one | 8, of which 5 through the real handler |
+| Only spaces count as present | 2; see below |
+| `http` is assessed | 3 |
+| A redirect is not recognised | 5 |
+| The redirect's lower limit becomes 301 | 1 |
+| The redirect's upper limit becomes 398 | 1 |
+| 4xx and 5xx are assessed | 5 |
+| The upper limit of a success becomes 298 | 1 |
+| The header values are saved | 19 |
+| Each of the three reason texts changed | 1 each |
+| The content headers are read instead | 1 |
+| A second request is sent | 5 |
+| An UP result does not carry the headers | 3 |
+| A DOWN result does not carry the headers | 4 |
+| The header limit raised to 128 KB | 2 |
+| The header limit lowered to 32 KB | 2 |
+| The record does not get the grade | 3 |
+| The record does not get the missing names | 3 |
+| The record does not get the reason | 1 |
+| The overview does not get the grade | 3 |
+| The overview does not get the missing names | 3 |
+| The overview does not get the reason | 1 |
+| The overview uses the second newest record | 10 |
+| The `LastCheckedAt` condition removed | 3 |
+| A column missing in the migration | 165, because reading a record then fails |
+| The explanation of the grade changed | 1 |
+| The explanation is not written | 2 |
+| The explanation uses `innerHTML` | 2 |
+| The cells use `innerHTML` | 1 |
+| The reason field is never read in the script | 1 |
+| The reason is shown as a dash | 0 at first; 1 after the test was added |
+| The cell returns a dash instead of the grade, or of the missing names | 1 each |
+| `Not assessed` changed | 1 |
+| `None` changed | 1 |
+| A column removed from the head of the table | 2 each |
+| A cell removed from the row | 2 each |
+
+"Only spaces count as present" fails only the tests of the reader, not the ones through the real handler. Between the server and `HttpResponseMessage` the spaces are removed, so such a header reaches the code as an empty value. The test through the handler therefore proves the empty case end to end, and only the tests of the reader prove the case with spaces.
 
 ### Red runs of the dashboard
 
@@ -571,7 +654,15 @@ Done by the owner on 2026-11-05 in Chrome against the real server (Kestrel), wit
 
 This is one run in one browser. Step E was typed by hand in the Console, so it shows that the browser obeys the policy, not that the page's own code is free of mistakes. Step H shows the 403 from a `file://` page, and which of `Sec-Fetch-Site` and `Origin` caused it was not read.
 
+Run against the real server (Kestrel) on 2026-11-09 for the security headers, with its own database file created from empty by the migrations, the worker off, Discord off and no checks, so that nothing left the machine: the overview had the three new fields as null for a service not yet checked, and the page had the two new columns and the element for the explanation. The `curl.exe` command for reading headers printed `method=GET` against `localhost`. This does not show a grade on a real response; that waits for the owner's run.
+
 ### Not run manually
+
+Security headers, waiting for the owner's run:
+
+- A grade on a real HTTPS response through the whole chain, compared with the headers the site really sends.
+- `http`, redirect and error responses against real websites.
+- The new columns and the explanation drawn in a browser, and that the right text is chosen for each case.
 
 Proven by tests only, and not confirmed against the real Discord:
 
@@ -650,6 +741,11 @@ The automated tests still cover a redirect in two separate parts, because `UrlSa
 - A host name other than `localhost`, `127.0.0.1` or `[::1]` gets 400.
 - An address that is not loopback stops the application with exit code 1 and a log line, through a test server that only claims the address.
 
+- The five security headers are read from the response the probe already has, with exactly one request and no redirect followed. Only `https` with a 2xx gets a grade. Every other answer gets a fixed reason, and no response gives empty fields.
+- Grades A, B, C, D and F follow the number of missing headers, and an empty value counts as missing. This also holds through the real handler against a local server.
+- Grade, missing names and reason are saved per check, and shown in the history and the overview. A new URL empties them in the overview. Older records stay and have empty fields.
+- Nothing a server sends reaches any answer: a hostile value in the headers and a `Location` value are absent from the check, the history and the overview. A response header section over 64 KB is refused.
+
 Dependency injection lifetimes were reviewed by reading the code only.
 
 ## MVP status
@@ -668,6 +764,7 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | `INotifier` with a Discord webhook | Done | Proven by tests, and confirmed by a manual run against a real channel. A wrong token from Discord and notifications turned off have not been run manually with a real send |
 | Webhook address outside git | Done | Proven by tests of the settings files and the log. A manual run confirms the secret is read, and that the log holds no address after a real send |
 | Dashboard (phase 5, not part of the MVP) | Done | The server side is proven by tests and a run against the real server, and the page by the owner's run in Chrome. Step D (`eval`) and the visible failure message are not confirmed on the screen |
+| Security headers with a grade, saved per check | Partial | Proven by tests. The owner's run against real websites and in a browser remains. The warning when a header disappears comes in task 3 |
 | README | Missing | |
 | GitHub Actions | Missing | Waits for the owner's approval |
 
@@ -730,6 +827,9 @@ Check records saved before this rule keep their old status: an earlier 3xx stays
 - The dashboard shows the whole URL, including any query. The page is local and shows the owner's own data, while Discord is a third party and gets no query. A screenshot for the README must not show a URL with a secret in it.
 - The dashboard cannot be tested without a browser. Playwright would need new packages and a downloaded browser, so it has not been added.
 - The browser asks for `favicon.ico`, which does not exist and is refused by the policy, so one line in the console is expected.
+- A security grade measures whether five headers are present, not whether their values are good. `Strict-Transport-Security: max-age=0` and a policy with `unsafe-inline` both count. Every header weighs the same, and a site with `frame-ancestors` but no `X-Frame-Options` counts as missing one.
+- A service that answers with a redirect or over `http` never gets a grade, and only the page itself can be assessed: the target of a redirect is not visited.
+- No automated test grades a real HTTPS response through the whole chain. The parts are tested separately: a stand-in with `https`, and the real handler over `http` on loopback. Automated HTTPS comes in task 2.
 - `LocalOnlyCheck` runs after the server has started, so a wrong port is open for a moment. Enabled services can start a check in that moment as well.
 
 ## Code style exceptions
@@ -774,6 +874,10 @@ Not proven by a test:
 Known problems:
 - There is no authentication or rate limiting. `GET /check` is open, and `GET /services/{id}/check` writes data. Other sites are now stopped, but any program on this machine still has full access. This is acceptable on localhost only and must be solved before any deployment.
 - Internal hostnames pass registration. They are stopped at connection time, after the DNS lookup has already been made.
+
+Security headers:
+- No new way out: the headers come from the probe's existing request, through the same handler. `SecurityHeaderHandlerTests` reaches `127.0.0.1` with a connector built in the test, through the internal `Create` method. No setting in the application opens loopback, and `RegisteredHandlerBlocksLoopbackAddress` proves that the registered handler still blocks it.
+- The values are not stored. Only "is it there?" is answered, and what is saved comes from a fixed list of names, so a hostile or long value cannot reach the database or the page. The dashboard writes these fields with `textContent` only.
 
 Error answers:
 - Only `ServiceValidationException` and `CheckInProgressException` show their message, and both hold fixed texts. The middleware no longer catches `ArgumentException`, so an internal error cannot become a 400 that shows its text.
@@ -846,7 +950,7 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes early so that every new feature is visible in it at once. The MVP still covers phases 1 to 4; the dashboard is built earlier but is not part of the MVP. Each task is one branch, with a plan approved first.
 
-**Next step:** phase 3, one task at a time; see "Phase 3: Security checks".
+**Next step:** the owner runs the security headers manually and reviews `feat/security-headers`. After that comes `feat/tls-certificate`, with a plan approved first; see "Phase 3: Security checks".
 
 ### Phase 1: Stable foundation
 
@@ -919,7 +1023,7 @@ Requirements for the later tasks:
 | Phase | Question | Current thinking |
 |---|---|---|
 | 3 | A service going to UNKNOWN can mean that its name now points to a private address. Phase 2 decided on a warning in the log and no message, because nothing was learned about the service | Consider a notification of its own in phase 3 |
-| 3 | 3xx counts as UP and is not followed, so `http://example.com` answering 301 gives only the redirect's headers and no certificate. That would produce a misleading grade and false alarms | Grade only a real HTTPS response; anything else is "cannot be assessed". Decide in phase 3 |
+| 3 | 3xx counts as UP and is not followed, so `http://example.com` answering 301 gives only the redirect's headers and no certificate. That would produce a misleading grade and false alarms | Decided: only `https` with a 2xx gets a grade. Everything else gets a fixed reason and no grade |
 | 3 | Save the redirect target (`Location`) and warn when it suddenly points to another domain, because that can mean the site has been hijacked. The value comes from the monitored server and can contain internal addresses, so how it is stored and shown must be decided | Not decided and not built. Starting point: never follow the value, compare only the host, show it as plain text and never as a link, and hide a target that is not a public address. Legitimate moves, such as a new login domain or CDN, can cause false alarms |
 | 3 | A certificate is only visible during the TLS handshake, and a reused connection does no new handshake. "On each check" therefore does not work with pooled connections | Either turn off pooling for the probe, which also rechecks the address on every check, or use the most recently seen certificate. The cost of the first option has not been measured |
 | 4 | Docker tooling licence | Not settled. Nothing is installed until the licence has been confirmed |
