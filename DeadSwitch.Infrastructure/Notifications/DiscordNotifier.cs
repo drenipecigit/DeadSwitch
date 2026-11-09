@@ -17,7 +17,7 @@ public sealed class DiscordNotifier : INotifier
 
     // Short, because the worker checks services one at a time and waits for this.
     // Internal so that a test can shorten it without really waiting five seconds.
-    internal TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(5);
+    internal TimeSpan SendTimeout { get; set; } = TimeSpan.FromSeconds(5);
 
     public DiscordNotifier(HttpClient client, IOptions<DiscordOptions> options, ILogger<DiscordNotifier> logger)
     {
@@ -36,7 +36,7 @@ public sealed class DiscordNotifier : INotifier
             return;
         }
 
-        using CancellationTokenSource timeout = new CancellationTokenSource(Timeout);
+        using CancellationTokenSource timeoutSource = new CancellationTokenSource(SendTimeout);
 
         // wait=true: by default Discord answers without an error even if the message was not saved,
         // so an alarm that was lost would look like a success.
@@ -50,7 +50,7 @@ public sealed class DiscordNotifier : INotifier
             using HttpResponseMessage response = await _client.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
-                timeout.Token);
+                timeoutSource.Token);
 
             if (response.IsSuccessStatusCode)
             {

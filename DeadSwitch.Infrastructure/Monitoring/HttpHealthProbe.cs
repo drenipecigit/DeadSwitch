@@ -19,8 +19,8 @@ public sealed class HttpHealthProbe : IHealthProbe
         Stopwatch stopwatch = Stopwatch.StartNew();
 
         // Linked: this token is cancelled both by the service's timeout and by the caller.
-        using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+        using CancellationTokenSource timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
 
         try
         {
@@ -32,7 +32,7 @@ public sealed class HttpHealthProbe : IHealthProbe
             using HttpResponseMessage response = await _client.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
-                timeout.Token);
+                timeoutSource.Token);
 
             int statusCode = (int)response.StatusCode;
 

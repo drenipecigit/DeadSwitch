@@ -232,7 +232,7 @@ public class DiscordNotifierTests
         StubDiscordHandler stub = new StubDiscordHandler();
         stub.HangUntilCancelled = true;
         DiscordNotifier notifier = CreateNotifier(stub, TestWebhook.Url);
-        notifier.Timeout = TimeSpan.FromMilliseconds(50);
+        notifier.SendTimeout = TimeSpan.FromMilliseconds(50);
 
         Task send = notifier.NotifyStatusChangedAsync(CreateChange("Shop", ExampleUrl));
 
@@ -248,7 +248,7 @@ public class DiscordNotifierTests
     {
         DiscordNotifier notifier = CreateNotifier(new StubDiscordHandler(), TestWebhook.Url);
 
-        Assert.Equal(TimeSpan.FromSeconds(5), notifier.Timeout);
+        Assert.Equal(TimeSpan.FromSeconds(5), notifier.SendTimeout);
     }
 
     private static async Task<string> SendAndReadContentAsync(StatusChange change)
