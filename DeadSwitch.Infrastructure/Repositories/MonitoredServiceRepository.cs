@@ -74,4 +74,46 @@ public class MonitoredServiceRepository : IMonitoredServiceRepository
             .Take(take)
             .ToListAsync(ct);
     }
+
+    // A row of another URL is also fetched, and it means that there is no baseline. It marks where the
+    // current URL began, so checks from before an earlier change of URL are never compared with.
+    public async Task<CheckRecord?> GetHeaderBaselineAsync(Guid id, string url, CancellationToken ct = default)
+    {
+        CheckRecord? newest = await _db.CheckRecords
+            .AsNoTracking()
+            .Where(record => record.MonitoredServiceId == id)
+            .Where(record => record.Url != url || record.MissingSecurityHeaders != null)
+            .OrderByDescending(record => record.CheckedAtUtc)
+            .ThenByDescending(record => record.Id)
+            .FirstOrDefaultAsync(ct);
+
+        return OnlyIfSameUrl(newest, url);
+    }
+
+    // Must find the same rows as CertificateWarningRule.Classify calls Valid or Rejected. SQL cannot call
+    // that method, so CertificateBaselineQueryTests checks that the two agree.
+    public async Task<CheckRecord?> GetCertificateBaselineAsync(Guid id, string url, CancellationToken ct = default)
+    {
+        CheckRecord? newest = await _db.CheckRecords
+            .AsNoTracking()
+            .Where(record => record.MonitoredServiceId == id)
+            .Where(record => record.Url != url
+                || record.CertificateNotAfterUtc != null
+                || record.CertificateNotAssessedReason == CertificateReasons.NotValid)
+            .OrderByDescending(record => record.CheckedAtUtc)
+            .ThenByDescending(record => record.Id)
+            .FirstOrDefaultAsync(ct);
+
+        return OnlyIfSameUrl(newest, url);
+    }
+
+    private static CheckRecord? OnlyIfSameUrl(CheckRecord? record, string url)
+    {
+        if (record == null || record.Url != url)
+        {
+            return null;
+        }
+
+        return record;
+    }
 }

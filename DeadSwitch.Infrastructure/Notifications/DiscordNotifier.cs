@@ -26,7 +26,17 @@ public sealed class DiscordNotifier : INotifier
         _logger = logger;
     }
 
-    public async Task NotifyStatusChangedAsync(StatusChange change)
+    public Task NotifyStatusChangedAsync(StatusChange change)
+    {
+        return SendAsync(DiscordMessage.Create(change), change.ServiceId);
+    }
+
+    public Task NotifySecurityWarningAsync(SecurityWarning warning)
+    {
+        return SendAsync(DiscordMessage.Create(warning), warning.ServiceId);
+    }
+
+    private async Task SendAsync(DiscordMessage message, Guid serviceId)
     {
         string? webhookUrl = _options.Value.WebhookUrl;
 
@@ -41,7 +51,7 @@ public sealed class DiscordNotifier : INotifier
         // wait=true: by default Discord answers without an error even if the message was not saved,
         // so an alarm that was lost would look like a success.
         using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, webhookUrl + "?wait=true");
-        request.Content = JsonContent.Create(DiscordMessage.Create(change));
+        request.Content = JsonContent.Create(message);
 
         int statusCode;
         try
@@ -56,7 +66,7 @@ public sealed class DiscordNotifier : INotifier
             {
                 // Logged here and not by the caller, because only this class knows that a message was
                 // really sent: without an address it returns above without sending anything.
-                _logger.LogInformation("Discord notification sent for service {ServiceId}.", change.ServiceId);
+                _logger.LogInformation("Discord notification sent for service {ServiceId}.", serviceId);
                 return;
             }
 

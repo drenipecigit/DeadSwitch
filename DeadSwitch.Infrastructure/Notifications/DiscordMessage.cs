@@ -61,6 +61,40 @@ internal sealed class DiscordMessage
         return new DiscordMessage(content);
     }
 
+    // Security: only the name comes from outside this class's fixed texts, and it goes through the same
+    // cleaning as above. No URL, date or number of days left is written, so nothing the monitored site
+    // has written or chosen can reach the channel.
+    public static DiscordMessage Create(SecurityWarning warning)
+    {
+        string name = FormatAsCode(warning.ServiceName, MaxNameLength);
+        string text;
+
+        if (warning.Kind == SecurityWarningKind.HeadersDisappeared)
+        {
+            text = name + " no longer sends: " + string.Join(SecurityHeaderRule.Separator, warning.DisappearedHeaders) + ".";
+        }
+        else if (warning.Kind == SecurityWarningKind.CertificateRejected)
+        {
+            text = "the TLS certificate of " + name + " was rejected.";
+        }
+        else
+        {
+            text = "the TLS certificate of " + name + " has at most " + DaysText(warning.ThresholdDays) + " left.";
+        }
+
+        return new DiscordMessage("DeadSwitch security warning: " + text);
+    }
+
+    private static string DaysText(int? days)
+    {
+        if (days == 1)
+        {
+            return "1 day";
+        }
+
+        return days + " days";
+    }
+
     private static string ToText(ServiceStatus status)
     {
         return status.ToString().ToUpperInvariant();
@@ -93,7 +127,7 @@ internal sealed class DiscordMessage
             {
                 cleaned.Append('\'');
             }
-            else if (char.IsControl(character))
+            else if (char.IsControl(character) || IsLineSeparatorOrInvisible(character))
             {
                 cleaned.Append(' ');
             }
@@ -104,6 +138,17 @@ internal sealed class DiscordMessage
         }
 
         return "`" + cleaned + "`";
+    }
+
+    // Security: IsControl misses these. A line separator could end the code format, and an invisible
+    // character could make a name look like something else. A joined emoji loses its joiner here.
+    private static bool IsLineSeparatorOrInvisible(char character)
+    {
+        UnicodeCategory category = char.GetUnicodeCategory(character);
+
+        return category == UnicodeCategory.LineSeparator
+            || category == UnicodeCategory.ParagraphSeparator
+            || category == UnicodeCategory.Format;
     }
 
     private static string Shorten(string text, int maxLength)

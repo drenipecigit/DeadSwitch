@@ -18,6 +18,7 @@ public class MonitoredServiceService
     private readonly TimeProvider _clock;
 
     private readonly INotifier _notifier;
+    private readonly SecurityWarningFinder _securityWarningFinder;
     private readonly ILogger<MonitoredServiceService> _logger;
 
     public MonitoredServiceService(
@@ -26,6 +27,7 @@ public class MonitoredServiceService
         ServiceLocks locks,
         TimeProvider clock,
         INotifier notifier,
+        SecurityWarningFinder securityWarningFinder,
         ILogger<MonitoredServiceService> logger)
     {
         _repository = repository;
@@ -33,6 +35,7 @@ public class MonitoredServiceService
         _locks = locks;
         _clock = clock;
         _notifier = notifier;
+        _securityWarningFinder = securityWarningFinder;
         _logger = logger;
     }
 
@@ -207,6 +210,7 @@ public class MonitoredServiceService
 
         CheckRecord record;
         StatusChange? statusChange = null;
+        List<SecurityWarning> securityWarnings;
 
         try
         {
@@ -256,6 +260,10 @@ public class MonitoredServiceService
                 record.CertificateNotAssessedReason = result.Certificate.NotAssessedReason;
             }
 
+            // Must be found before LastCheckedAt is overwritten and the check is saved below. Not inside a
+            // try: a shutdown here must stop the check like any other cancellation, and nothing is saved.
+            securityWarnings = await _securityWarningFinder.FindAsync(service, record, ct);
+
             // Must be read before CurrentStatus is overwritten below.
             bool becameUnknown = result.Status == ServiceStatus.Unknown && service.CurrentStatus != ServiceStatus.Unknown;
 
@@ -302,6 +310,13 @@ public class MonitoredServiceService
             await SendNotificationAsync(statusChange);
         }
 
+        // Does not stop for a shutdown, the same as the message above: the check is saved, so the next
+        // check sees no change, and a warning stopped here would be lost. Each send limits its own time.
+        foreach (SecurityWarning warning in securityWarnings)
+        {
+            await SendSecurityWarningAsync(warning);
+        }
+
         return record;
     }
 
@@ -323,6 +338,26 @@ public class MonitoredServiceService
             // Security: only the type is logged. The exception itself is not passed to the logger,
             // because its text could hold the secret address of the channel.
             _logger.LogError("Notification failed for service {ServiceId} with {ExceptionType}.", change.ServiceId, exception.GetType().Name);
+        }
+    }
+
+    // Catches everything for the same reasons as SendNotificationAsync. One for each warning, so that a
+    // failed warning does not stop the next one.
+    private async Task SendSecurityWarningAsync(SecurityWarning warning)
+    {
+        try
+        {
+            await _notifier.NotifySecurityWarningAsync(warning);
+        }
+        catch (NotificationFailedException exception)
+        {
+            // Safe to log: this exception only ever holds fixed texts.
+            _logger.LogWarning("Security warning failed for service {ServiceId}: {Reason}", warning.ServiceId, exception.Message);
+        }
+        catch (Exception exception)
+        {
+            // Security: only the type is logged, for the same reason as in SendNotificationAsync.
+            _logger.LogError("Security warning failed for service {ServiceId} with {ExceptionType}.", warning.ServiceId, exception.GetType().Name);
         }
     }
 

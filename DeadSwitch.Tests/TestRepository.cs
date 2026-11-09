@@ -73,4 +73,16 @@ internal sealed class TestRepository : IMonitoredServiceRepository
     {
         return _real.GetHistoryAsync(id, skip, take, ct);
     }
+
+    public Task<CheckRecord?> GetHeaderBaselineAsync(Guid id, string url, CancellationToken ct = default)
+    {
+        _control.RunBaselineSwitches();
+        return _real.GetHeaderBaselineAsync(id, url, ct);
+    }
+
+    public Task<CheckRecord?> GetCertificateBaselineAsync(Guid id, string url, CancellationToken ct = default)
+    {
+        _control.RunBaselineSwitches();
+        return _real.GetCertificateBaselineAsync(id, url, ct);
+    }
 }

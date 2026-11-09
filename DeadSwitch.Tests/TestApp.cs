@@ -41,6 +41,9 @@ internal sealed class TestApp : WebApplicationFactory<Program>
 
     public CapturedLogs Logs { get; } = new CapturedLogs();
 
+    // When set, written to the configuration as SecurityWarnings:CertificateWarningDays.
+    public string? CertificateWarningDaysSetting { get; set; }
+
     // When set, the test server claims to listen on this address. No port is opened.
     public string? PretendedAddress { get; set; }
 
@@ -132,6 +135,11 @@ internal sealed class TestApp : WebApplicationFactory<Program>
     {
         Dictionary<string, string?> settings = new Dictionary<string, string?>();
         settings["Discord:WebhookUrl"] = _webhookUrl;
+
+        if (CertificateWarningDaysSetting != null)
+        {
+            settings["SecurityWarnings:CertificateWarningDays"] = CertificateWarningDaysSetting;
+        }
 
         // With the real notifier everything is logged, so a test can show what the log never holds.
         if (_discordStub != null)

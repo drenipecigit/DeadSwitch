@@ -99,6 +99,15 @@ builder.Services.AddOptions<MonitoringOptions>()
     // With it, the application refuses to start.
     .ValidateOnStart();
 
+builder.Services.AddOptions<SecurityWarningSettings>()
+    .BindConfiguration("SecurityWarnings")
+    .Validate(SecurityWarningSettings.HasValidWarningDays, "CertificateWarningDays must be between 1 and 365.")
+    .ValidateOnStart();
+
+// Registered as a plain object, so that Application does not need the options package.
+builder.Services.AddSingleton(provider => provider.GetRequiredService<IOptions<SecurityWarningSettings>>().Value);
+builder.Services.AddScoped<SecurityWarningFinder>();
+
 builder.Services.AddHostedService<MonitoringWorker>();
 
 WebApplication app = builder.Build();

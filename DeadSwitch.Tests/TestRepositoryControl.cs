@@ -20,6 +20,26 @@ internal sealed class TestRepositoryControl
     // When true, SaveCheckAsync throws, so a test can see what happens when a check cannot be saved.
     public volatile bool FailSaveCheck;
 
+    // When set, reading a baseline throws this one, so a test can see a database failure at that moment.
+    public volatile Exception? ExceptionFromBaseline;
+
+    // When set, runs just before a baseline is read, so a test can start a shutdown at exactly that moment.
+    public volatile Action? RunAtBaseline;
+
+    // Called by TestRepository before it reads a baseline.
+    public void RunBaselineSwitches()
+    {
+        if (ExceptionFromBaseline != null)
+        {
+            throw ExceptionFromBaseline;
+        }
+
+        if (RunAtBaseline != null)
+        {
+            RunAtBaseline();
+        }
+    }
+
     public void RememberLockCount(int lockCount)
     {
         lock (_sync)

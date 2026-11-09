@@ -9,8 +9,8 @@ namespace DeadSwitch.Infrastructure.Monitoring;
 
 public sealed class HttpHealthProbe : IHealthProbe
 {
-    internal const string CertificateNotValidReason = "The certificate was not valid.";
-    internal const string NoNewHandshakeReason = "No new TLS handshake for this check.";
+    internal const string CertificateNotValidReason = CertificateReasons.NotValid;
+    internal const string NoNewHandshakeReason = CertificateReasons.NoNewHandshake;
 
     private readonly HttpClient _client;
     private readonly TlsHandshakeRecorder _recorder;

@@ -40,4 +40,24 @@ public static class SecurityHeaderRule
 
         return "F";
     }
+
+    // The headers that are missing now but were not missing before. The loop goes over our own fixed
+    // list and compares whole names, so only those names can come out, whatever the saved text holds.
+    public static List<string> FindDisappeared(string previousMissing, string currentMissing)
+    {
+        string[] previous = previousMissing.Split(Separator);
+        string[] current = currentMissing.Split(Separator);
+
+        List<string> disappeared = new List<string>();
+
+        foreach (string name in CheckedHeaders)
+        {
+            if (current.Contains(name) && !previous.Contains(name))
+            {
+                disappeared.Add(name);
+            }
+        }
+
+        return disappeared;
+    }
 }

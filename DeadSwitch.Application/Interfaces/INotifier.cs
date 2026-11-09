@@ -7,4 +7,7 @@ public interface INotifier
     // cancellation stopped the message, the status would not change again and the alarm would be lost.
     // An implementation must therefore limit its own time.
     Task NotifyStatusChangedAsync(StatusChange change);
+
+    // No CancellationToken, for the same reason as above: the next check sees no change to warn about.
+    Task NotifySecurityWarningAsync(SecurityWarning warning);
 }

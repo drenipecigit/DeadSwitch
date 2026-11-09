@@ -690,6 +690,41 @@ public class MonitoringWorkerLoopTests
         }
     }
 
+    // The real StopAsync at the moment a baseline is read: the same as any other shutdown before the save.
+    [Fact]
+    public async Task ShutdownWhileReadingASecurityBaselineEndsTheLoopWithoutError()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService service = await RegisterAsync(app, client, "Example");
+        TestLogger logger = new TestLogger();
+        using MonitoringWorker worker = CreateWorkerThatPollsEverySecond(app, logger);
+        app.Probe.Result = TestProbeResults.Assessed(TestProbeResults.NothingMissing);
+        await worker.StartAsync(CancellationToken.None);
+        await logger.WaitForPassToFinishAsync();
+
+        Task? stopping = null;
+        using SemaphoreSlim baselineReached = new SemaphoreSlim(0);
+
+        void StopTheWorker()
+        {
+            stopping = worker.StopAsync(CancellationToken.None);
+            baselineReached.Release();
+        }
+
+        app.RepositoryControl.RunAtBaseline = StopTheWorker;
+        app.Probe.Result = TestProbeResults.Assessed(TestSecurityHeaders.FrameOptions);
+        app.Clock.Advance(TimeSpan.FromSeconds(11));
+        await WaitForSignalAsync(baselineReached);
+        await stopping!;
+
+        Assert.True(worker.ExecuteTask!.IsCompletedSuccessfully);
+        Assert.Single(await GetHistoryAsync(client, service));
+        Assert.Empty(app.Notifier.GetSecurityWarnings());
+        Assert.Empty(logger.GetErrors());
+    }
+
     private static MonitoringWorker CreateWorkerThatPollsEverySecond(TestApp app, TestLogger logger)
     {
         MonitoringOptions options = new MonitoringOptions();
