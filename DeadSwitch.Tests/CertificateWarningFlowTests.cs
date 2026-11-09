@@ -374,6 +374,22 @@ public class CertificateWarningFlowTests
         Assert.Empty(scenario.GetWarnings());
     }
 
+    // The other URL has no verdict, so only its timeout row marks where the current URL began.
+    [Fact]
+    public async Task ChangingBackAfterOnlyTimeoutsOnTheOtherUrlDoesNotUseTheOldCertificate()
+    {
+        await using SecurityWarningScenario scenario = await SecurityWarningScenario.StartAsync();
+        await scenario.CheckAsync(scenario.ValidCertificateWithDaysLeft(FarAway));
+        await scenario.ChangeUrlAsync(SecurityWarningScenario.OtherUrl);
+        await scenario.CheckAsync(TestProbeResults.Timeout());
+        await scenario.ChangeUrlAsync(SecurityWarningScenario.ServiceUrl);
+
+        await scenario.CheckAsync(TestProbeResults.Timeout());
+        await scenario.CheckAsync(TestProbeResults.Rejected());
+
+        Assert.Empty(scenario.GetWarnings());
+    }
+
     // No check of the other URL exists to mark the change, so only LastCheckedAt shows that it happened.
     [Fact]
     public async Task ChangingToAnotherUrlAndBackWithoutACheckStartsTheCertificateOver()

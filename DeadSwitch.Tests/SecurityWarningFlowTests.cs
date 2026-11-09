@@ -215,6 +215,22 @@ public class SecurityWarningFlowTests
         Assert.Empty(scenario.GetWarnings());
     }
 
+    // The other URL has no assessed row, so only its timeout row marks where the current URL began.
+    [Fact]
+    public async Task ChangingBackAfterOnlyTimeoutsOnTheOtherUrlDoesNotCompareWithTheOldChecks()
+    {
+        await using SecurityWarningScenario scenario = await SecurityWarningScenario.StartAsync();
+        await scenario.CheckAsync(TestProbeResults.Assessed(Nothing));
+        await scenario.ChangeUrlAsync(SecurityWarningScenario.OtherUrl);
+        await scenario.CheckAsync(TestProbeResults.Timeout());
+        await scenario.ChangeUrlAsync(SecurityWarningScenario.ServiceUrl);
+
+        await scenario.CheckAsync(TestProbeResults.Timeout());
+        await scenario.CheckAsync(TestProbeResults.Assessed(Frame));
+
+        Assert.Empty(scenario.GetWarnings());
+    }
+
     // No check of the other URL exists to mark the change, so only LastCheckedAt shows that it happened.
     [Fact]
     public async Task ChangingToAnotherUrlAndBackWithoutACheckStartsOver()
