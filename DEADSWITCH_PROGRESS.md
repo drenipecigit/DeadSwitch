@@ -125,6 +125,23 @@ Date: 2026-11-09.
 - Without the 68 tests that carry the trait `NameLookupWithoutConnector`: 753 passed.
 - No test sends anything to Discord. Real messages are confirmed by the owner's run; see "Manual run".
 
+### Readability changes without new behaviour
+
+`refactor/readability` changes names, comments and how values are written, and nothing that can be seen from the outside: named arguments for `ServiceOverview`, the parameter `monitoring` for the service layer, named constants for limits and time values, written-out JSON names on `GET /check` and `GET /services/{id}/check`, clearer names for the timeouts, an ordinary constructor in `DeadSwitchDbContext`, corrected comments and a corrected request file. The migrations and the SSRF protection were not touched.
+
+Tests cannot be red first for a change like this, so the behaviour was compared before and after:
+
+- All 897 tests passed before every commit. The only test lines changed are the two that use the renamed `SendTimeout`, and three comments.
+- The real server (Kestrel), with its own database file, the worker off, Discord off and `localhost` only, answered 45 requests identically once ids, trace ids and dates were masked. They cover the limits of a name, an interval, a timeout and `take`, `PUT` without each field, the fixed errors, a blocked `Host` and another site's request, and `/openapi/v1.json`.
+- Starting with a poll of 0, 1, 3600 and 3601 gave the same result.
+- `dotnet ef migrations script` gave identical SQL, and `has-pending-model-changes` reported no change.
+
+Not shown by this comparison:
+
+- `CheckUrlTimeoutSeconds` and `DefaultHistoryTake`: the first needs a real outgoing check and the second more than 50 records, so these values were only read in the diff.
+- A check through `POST`, `GET /services/{id}/check` or the worker against a real website. These are covered by tests with a fake probe.
+- That the comparison would have noticed a changed value. It was not run against code broken on purpose.
+
 ### Red runs of the security headers
 
 Each group ran before the real code was written, with the columns and the migration in place, `GradeFor` always `F`, an empty header list, a reader that assesses nothing, a probe that does not call it, and a dashboard without the new parts.
@@ -970,7 +987,7 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes early so that every new feature is visible in it at once. The MVP still covers phases 1 to 4; the dashboard is built earlier but is not part of the MVP. Each task is one branch, with a plan approved first.
 
-**Next step:** the owner reviews and merges `feat/security-headers`. After that comes `feat/tls-certificate`, with a plan approved first; see "Phase 3: Security checks".
+**Next step:** the owner reviews and merges `refactor/readability`. After that comes `feat/tls-certificate`, with a plan approved first; see "Phase 3: Security checks".
 
 ### Phase 1: Stable foundation
 
