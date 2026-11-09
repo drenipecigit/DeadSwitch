@@ -654,15 +654,35 @@ Done by the owner on 2026-11-05 in Chrome against the real server (Kestrel), wit
 
 This is one run in one browser. Step E was typed by hand in the Console, so it shows that the browser obeys the policy, not that the page's own code is free of mistakes. Step H shows the 403 from a `file://` page, and which of `Sec-Fetch-Site` and `Origin` caused it was not read.
 
-Run against the real server (Kestrel) on 2026-11-09 for the security headers, with its own database file created from empty by the migrations, the worker off, Discord off and no checks, so that nothing left the machine: the overview had the three new fields as null for a service not yet checked, and the page had the two new columns and the element for the explanation. The `curl.exe` command for reading headers printed `method=GET` against `localhost`. This does not show a grade on a real response; that waits for the owner's run.
+Run against the real server (Kestrel) on 2026-11-09 for the security headers, with its own database file created from empty by the migrations, the worker off, Discord off and no checks, so that nothing left the machine: the overview had the three new fields as null for a service not yet checked, and the page had the two new columns and the element for the explanation. The `curl.exe` command for reading headers printed `method=GET` against `localhost`. This does not show a grade on a real response; the owner's run below does.
+
+Done by the owner on 2026-11-09 in Chrome against the real server (Kestrel) for the security headers, with its own database file, the worker off and Discord off. Each service was checked manually, and `curl.exe` read the headers of the same address with a `GET` of its own.
+
+| Address | Status | Security grade | Header details | `curl.exe` |
+|---|---|---|---|---|
+| `https://github.com/` | UP, 200 | A | `None` | All five headers present |
+| `https://example.com/` | UP, 200 | F | All five names | None of the five present |
+| `http://github.com/` | UP, 301 | `Not assessed` | `Not an HTTPS address.` | |
+| `https://www.github.com/` | UP, 301 | `Not assessed` | `The response was a redirect.` | |
+| `https://github.com/deadswitch-page-that-does-not-exist` | DOWN, `Check timed out.` after 10008 ms | `-` | `-` | 504 afterwards |
+| `https://api.github.com/deadswitch-page-that-does-not-exist` | DOWN, 404 | `Not assessed` | `The response was not a success.` | All five headers present on the 404, and no grade was set |
+| A service that was not checked | | `-` | `-` | |
+
+- The timeout row tested no 404. It shows the case with no response: all three fields empty. The `api.github.com` row is the one that shows an error response.
+- The fixed explanation was shown above the table, the Console had no red lines, and Discord stayed silent.
+- `curl.exe` showed `method=GET` and `redirects=0` in every run.
+- The output of the header command cut long lines at 70 characters, so the values of the headers were not compared in full. The comparison shows which headers exist.
+- The server was restarted during the run with the same database file, and the check against `api.github.com` ran after the restart.
+
+This is one run in one browser, against sites whose headers can change.
 
 ### Not run manually
 
-Security headers, waiting for the owner's run:
+Security headers:
 
-- A grade on a real HTTPS response through the whole chain, compared with the headers the site really sends.
-- `http`, redirect and error responses against real websites.
-- The new columns and the explanation drawn in a browser, and that the right text is chosen for each case.
+- An automated test of the whole chain over HTTPS. The owner's run above covers it by hand; the automated part comes in task 2.
+- Old rows in a real upgraded database. The migration is proven by a test with an in-memory database and was run from empty against a separate file.
+- Whether a grade is fair for the values of the headers. Only their presence is assessed.
 
 Proven by tests only, and not confirmed against the real Discord:
 
@@ -764,7 +784,7 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | `INotifier` with a Discord webhook | Done | Proven by tests, and confirmed by a manual run against a real channel. A wrong token from Discord and notifications turned off have not been run manually with a real send |
 | Webhook address outside git | Done | Proven by tests of the settings files and the log. A manual run confirms the secret is read, and that the log holds no address after a real send |
 | Dashboard (phase 5, not part of the MVP) | Done | The server side is proven by tests and a run against the real server, and the page by the owner's run in Chrome. Step D (`eval`) and the visible failure message are not confirmed on the screen |
-| Security headers with a grade, saved per check | Partial | Proven by tests. The owner's run against real websites and in a browser remains. The warning when a header disappears comes in task 3 |
+| Security headers with a grade, saved per check | Done | Proven by tests and by the owner's run against real websites in Chrome. Not tested: the whole chain over HTTPS in an automated test, old rows in a real upgraded database, and whether a grade is fair for the values. The warning when a header disappears comes in task 3 |
 | README | Missing | |
 | GitHub Actions | Missing | Waits for the owner's approval |
 
@@ -950,7 +970,7 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes early so that every new feature is visible in it at once. The MVP still covers phases 1 to 4; the dashboard is built earlier but is not part of the MVP. Each task is one branch, with a plan approved first.
 
-**Next step:** the owner runs the security headers manually and reviews `feat/security-headers`. After that comes `feat/tls-certificate`, with a plan approved first; see "Phase 3: Security checks".
+**Next step:** the owner reviews and merges `feat/security-headers`. After that comes `feat/tls-certificate`, with a plan approved first; see "Phase 3: Security checks".
 
 ### Phase 1: Stable foundation
 
