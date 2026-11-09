@@ -124,7 +124,7 @@ public class SecurityHeaderProbeTests
     private static async Task<ProbeResult> CheckAsync(ScriptedHttpHandler handler, string url)
     {
         using HttpClient client = new HttpClient(handler);
-        HttpHealthProbe probe = new HttpHealthProbe(client);
+        HttpHealthProbe probe = new HttpHealthProbe(client, new TlsHandshakeRecorder(TimeProvider.System));
         return await probe.CheckAsync(url, 1, CancellationToken.None);
     }
 }

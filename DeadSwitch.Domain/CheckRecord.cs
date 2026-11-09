@@ -27,4 +27,10 @@ public class CheckRecord
 
     // A fixed text saying why the response got no grade.
     public string? SecurityNotAssessedReason { get; set; }
+
+    // When the certificate seen in this check expires. Null when this check saw no valid certificate.
+    public DateTime? CertificateNotAfterUtc { get; set; }
+
+    // A fixed text saying why this check has no certificate date.
+    public string? CertificateNotAssessedReason { get; set; }
 }

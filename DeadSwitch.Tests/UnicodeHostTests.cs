@@ -90,7 +90,7 @@ public class UnicodeHostTests
     {
         CountingDns dns = new CountingDns();
         using HttpClient client = CreateProtectedClient(dns);
-        HttpHealthProbe probe = new HttpHealthProbe(client);
+        HttpHealthProbe probe = new HttpHealthProbe(client, new TlsHandshakeRecorder(TimeProvider.System));
 
         ProbeResult result = await probe.CheckAsync(url, 2, CancellationToken.None);
 
@@ -112,7 +112,7 @@ public class UnicodeHostTests
         await InsertOldServiceAsync(app, url);
         CountingDns dns = new CountingDns();
         using HttpClient probeClient = CreateProtectedClient(dns);
-        HttpHealthProbe realProbe = new HttpHealthProbe(probeClient);
+        HttpHealthProbe realProbe = new HttpHealthProbe(probeClient, new TlsHandshakeRecorder(TimeProvider.System));
 
         Task<ProbeResult> CheckWithRealProbe(CancellationToken cancellationToken)
         {

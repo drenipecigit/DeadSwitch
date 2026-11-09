@@ -1,4 +1,5 @@
 using System.Net;
+using System.Security.Cryptography.X509Certificates;
 using DeadSwitch.Application.Interfaces;
 using DeadSwitch.Application.Services;
 using DeadSwitch.Domain;
@@ -72,6 +73,38 @@ public class SsrfProtectionTests
         Assert.NotNull(handler.ConnectCallback);
         Assert.Equal(TimeSpan.FromMinutes(2), handler.PooledConnectionLifetime);
         Assert.Equal(64, handler.MaxResponseHeadersLength);
+    }
+
+    // The probe's handler notes certificates, and the application has no way to trust anything extra.
+    [Fact]
+    public async Task RegisteredHandlerRecordsCertificatesAndTrustsNothingExtra()
+    {
+        await using TestApp app = new TestApp();
+
+        HttpMessageHandler current = CreateRegisteredHandler(app);
+        while (current is DelegatingHandler wrapper)
+        {
+            current = wrapper.InnerHandler!;
+        }
+
+        SocketsHttpHandler handler = Assert.IsType<SocketsHttpHandler>(current);
+        Assert.NotNull(handler.SslOptions.RemoteCertificateValidationCallback);
+        Assert.IsType<TlsHandshakeRecorder>(handler.SslOptions.RemoteCertificateValidationCallback.Target);
+        Assert.Null(handler.SslOptions.CertificateChainPolicy);
+    }
+
+    [Fact]
+    public async Task RegisteredHandlerBlocksLoopbackAddressOverHttps()
+    {
+        using X509Certificate2 certificate = TestCertificates.CreateForLocalAddress();
+        await using LocalTestServer server = await LocalTestServer.StartHttpsAsync(certificate);
+        await using TestApp app = new TestApp();
+        using HttpClient client = new HttpClient(CreateRegisteredHandler(app), disposeHandler: false);
+
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            client.GetAsync($"https://127.0.0.1:{server.Port}/ok"));
+
+        Assert.Equal(0, server.RequestCount);
     }
 
     // The control for all the blocking tests: it shows the server can be reached when the rule
@@ -256,7 +289,7 @@ public class SsrfProtectionTests
     {
         FakeDns dns = new FakeDns(new[] { AllowedAddress });
         using HttpClient client = CreateClient(dns, UrlSafety.IsPublicAddress);
-        HttpHealthProbe probe = new HttpHealthProbe(client);
+        HttpHealthProbe probe = new HttpHealthProbe(client, new TlsHandshakeRecorder(TimeProvider.System));
 
         ProbeResult result = await probe.CheckAsync("http://looks-public.test/", 5, CancellationToken.None);
 
@@ -275,7 +308,7 @@ public class SsrfProtectionTests
     {
         FakeDns dns = new FakeDns(new[] { AllowedAddress });
         using HttpClient client = CreateClient(dns, UrlSafety.IsPublicAddress);
-        HttpHealthProbe probe = new HttpHealthProbe(client);
+        HttpHealthProbe probe = new HttpHealthProbe(client, new TlsHandshakeRecorder(TimeProvider.System));
 
         ProbeResult result = await probe.CheckAsync("http://looks-public.test/", 5, CancellationToken.None);
 
@@ -291,7 +324,7 @@ public class SsrfProtectionTests
     {
         FakeDns dns = new FakeDns(Array.Empty<IPAddress>());
         using HttpClient client = CreateClient(dns, IsAllowedAddress);
-        HttpHealthProbe probe = new HttpHealthProbe(client);
+        HttpHealthProbe probe = new HttpHealthProbe(client, new TlsHandshakeRecorder(TimeProvider.System));
 
         ProbeResult result = await probe.CheckAsync("http://looks-public.test/", 5, CancellationToken.None);
 

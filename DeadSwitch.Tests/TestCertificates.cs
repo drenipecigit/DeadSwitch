@@ -11,7 +11,7 @@ internal static class TestCertificates
 {
     public const string MonitoredHost = "monitored.test";
 
-    // What Uri.IdnHost makes of "bücher.test".
+    // What Uri.IdnHost makes of "b\u00FCcher.test".
     public const string IdnMonitoredHost = "xn--bcher-kva.test";
 
     private const string OrdinarySubject = "CN=DeadSwitch test";

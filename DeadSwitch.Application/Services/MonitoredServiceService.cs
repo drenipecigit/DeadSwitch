@@ -228,6 +228,13 @@ public class MonitoredServiceService
                 record.SecurityNotAssessedReason = result.SecurityHeaders.NotAssessedReason;
             }
 
+            // Null when nothing can be said about the certificate, and then the two fields stay empty.
+            if (result.Certificate != null)
+            {
+                record.CertificateNotAfterUtc = result.Certificate.NotAfterUtc;
+                record.CertificateNotAssessedReason = result.Certificate.NotAssessedReason;
+            }
+
             // Must be read before CurrentStatus is overwritten below.
             bool becameUnknown = result.Status == ServiceStatus.Unknown && service.CurrentStatus != ServiceStatus.Unknown;
 

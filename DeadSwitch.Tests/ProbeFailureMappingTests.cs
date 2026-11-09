@@ -77,7 +77,7 @@ public class ProbeFailureMappingTests
     {
         PublicInternetConnector connector = new PublicInternetConnector(resolveHost, UrlSafety.IsPublicAddress);
         using HttpClient client = new HttpClient(ProtectedHttpHandler.Create(connector));
-        HttpHealthProbe probe = new HttpHealthProbe(client);
+        HttpHealthProbe probe = new HttpHealthProbe(client, new TlsHandshakeRecorder(TimeProvider.System));
         return await probe.CheckAsync(url, 2, CancellationToken.None);
     }
 

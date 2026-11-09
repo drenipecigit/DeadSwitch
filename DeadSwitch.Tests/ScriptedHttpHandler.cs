@@ -8,10 +8,12 @@ internal sealed class ScriptedHttpHandler : HttpMessageHandler
     public HttpResponseMessage? Response;
     public Exception? Failure;
     public bool NeverAnswers;
+    public HttpRequestMessage? LastRequest;
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
         Requests++;
+        LastRequest = request;
 
         if (NeverAnswers)
         {

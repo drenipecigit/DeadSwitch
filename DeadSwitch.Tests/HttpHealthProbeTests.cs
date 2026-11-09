@@ -25,7 +25,7 @@ public class HttpHealthProbeTests
             return Task.FromResult(new HttpResponseMessage((HttpStatusCode)code));
         });
         using HttpClient client = new HttpClient(handler);
-        HttpHealthProbe probe = new HttpHealthProbe(client);
+        HttpHealthProbe probe = new HttpHealthProbe(client, new TlsHandshakeRecorder(TimeProvider.System));
 
         ProbeResult result = await probe.CheckAsync("https://example.com", 1, CancellationToken.None);
 
@@ -49,7 +49,7 @@ public class HttpHealthProbeTests
             return Task.FromResult(response);
         });
         using HttpClient client = new HttpClient(handler);
-        HttpHealthProbe probe = new HttpHealthProbe(client);
+        HttpHealthProbe probe = new HttpHealthProbe(client, new TlsHandshakeRecorder(TimeProvider.System));
 
         ProbeResult result = await probe.CheckAsync("https://example.com", 1, CancellationToken.None);
 
@@ -67,7 +67,7 @@ public class HttpHealthProbeTests
             throw new HttpRequestException("secret destination");
         });
         using HttpClient client = new HttpClient(handler);
-        HttpHealthProbe probe = new HttpHealthProbe(client);
+        HttpHealthProbe probe = new HttpHealthProbe(client, new TlsHandshakeRecorder(TimeProvider.System));
 
         ProbeResult result = await probe.CheckAsync("https://example.com", 1, CancellationToken.None);
 
@@ -80,7 +80,7 @@ public class HttpHealthProbeTests
     public async Task TimeoutIsRecordedAsDown()
     {
         using HttpClient client = new HttpClient(new StubHandler(HangUntilCancelledAsync));
-        HttpHealthProbe probe = new HttpHealthProbe(client);
+        HttpHealthProbe probe = new HttpHealthProbe(client, new TlsHandshakeRecorder(TimeProvider.System));
 
         ProbeResult result = await probe.CheckAsync("https://example.com", 1, CancellationToken.None);
 
@@ -100,7 +100,7 @@ public class HttpHealthProbeTests
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
         });
         using HttpClient client = new HttpClient(handler);
-        HttpHealthProbe probe = new HttpHealthProbe(client);
+        HttpHealthProbe probe = new HttpHealthProbe(client, new TlsHandshakeRecorder(TimeProvider.System));
 
         ProbeResult result = await probe.CheckAsync(url, 1, CancellationToken.None);
 
@@ -114,7 +114,7 @@ public class HttpHealthProbeTests
     public async Task CallerCancellationPropagates()
     {
         using HttpClient client = new HttpClient(new StubHandler(HangUntilCancelledAsync));
-        HttpHealthProbe probe = new HttpHealthProbe(client);
+        HttpHealthProbe probe = new HttpHealthProbe(client, new TlsHandshakeRecorder(TimeProvider.System));
         using CancellationTokenSource cancellation = new CancellationTokenSource();
         cancellation.Cancel();
 

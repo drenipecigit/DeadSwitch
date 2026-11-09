@@ -150,7 +150,7 @@ public class SecurityHeaderStorageTests
         _handler.Response.Headers.Location = new Uri($"http://127.0.0.1/{LocationMarker}");
         TestSecurityHeaders.AddAll(_handler.Response.Headers, HeaderMarker);
         using HttpClient probeClient = new HttpClient(_handler);
-        _realProbe = new HttpHealthProbe(probeClient);
+        _realProbe = new HttpHealthProbe(probeClient, new TlsHandshakeRecorder(TimeProvider.System));
         app.Probe.Check = CheckWithTheRealProbeAsync;
 
         HttpResponseMessage checkResponse = await client.PostAsync($"/services/{service.Id}/check", null);

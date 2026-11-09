@@ -23,6 +23,12 @@ namespace DeadSwitch.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTime?>("CertificateNotAfterUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CertificateNotAssessedReason")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("CheckedAtUtc")
                         .HasColumnType("TEXT");
 

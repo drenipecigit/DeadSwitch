@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Net;
+using System.Security.Authentication;
 using DeadSwitch.Application.Interfaces;
 using DeadSwitch.Application.Services;
 using DeadSwitch.Domain;
@@ -7,11 +9,16 @@ namespace DeadSwitch.Infrastructure.Monitoring;
 
 public sealed class HttpHealthProbe : IHealthProbe
 {
-    private readonly HttpClient _client;
+    internal const string CertificateNotValidReason = "The certificate was not valid.";
+    internal const string NoNewHandshakeReason = "No new TLS handshake for this check.";
 
-    public HttpHealthProbe(HttpClient client)
+    private readonly HttpClient _client;
+    private readonly TlsHandshakeRecorder _recorder;
+
+    public HttpHealthProbe(HttpClient client, TlsHandshakeRecorder recorder)
     {
         _client = client;
+        _recorder = recorder;
     }
 
     public async Task<ProbeResult> CheckAsync(string url, int timeoutSeconds, CancellationToken cancellationToken)
@@ -22,10 +29,26 @@ public sealed class HttpHealthProbe : IHealthProbe
         using CancellationTokenSource timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeoutSource.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
 
+        // Holds the host while the recorder can have an entry that this check has not taken yet.
+        string? hostWithEntry = null;
+
         try
         {
             Uri uri = UrlSafety.Validate(url);
+
+            if (uri.Scheme == Uri.UriSchemeHttps)
+            {
+                hostWithEntry = uri.IdnHost;
+            }
+
             using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, uri);
+
+            // A reused connection makes no handshake, so there would be no certificate to read. Closing
+            // it also means that the address is checked again on every check. Connection: close only
+            // exists up to HTTP/1.1, so the version is stated and may not be raised by the server.
+            request.Version = HttpVersion.Version11;
+            request.VersionPolicy = HttpVersionPolicy.RequestVersionExact;
+            request.Headers.ConnectionClose = true;
 
             // ResponseHeadersRead: stop waiting at the headers. The status code and the security headers are
             // all a check needs, and a large body must not affect the measured time.
@@ -39,16 +62,19 @@ public sealed class HttpHealthProbe : IHealthProbe
             // Read from the response that is already here, so no extra request is sent.
             SecurityHeaderCheck securityHeaders = SecurityHeaderReader.Read(uri, statusCode, response.Headers);
 
+            CertificateCheck certificate = ReadCertificateOfResponse(uri);
+            hostWithEntry = null;
+
             // A redirect proves that the server answered, so it counts as UP. The target is never
             // followed or checked, which means a redirect to a broken page also counts as UP.
             bool isRedirect = statusCode >= 300 && statusCode <= 399;
 
             if (response.IsSuccessStatusCode || isRedirect)
             {
-                return new ProbeResult(ServiceStatus.Up, statusCode, stopwatch.ElapsedMilliseconds, null, securityHeaders);
+                return new ProbeResult(ServiceStatus.Up, statusCode, stopwatch.ElapsedMilliseconds, null, securityHeaders, certificate);
             }
 
-            return new ProbeResult(ServiceStatus.Down, statusCode, stopwatch.ElapsedMilliseconds, $"HTTP {statusCode}", securityHeaders);
+            return new ProbeResult(ServiceStatus.Down, statusCode, stopwatch.ElapsedMilliseconds, $"HTTP {statusCode}", securityHeaders, certificate);
         }
         catch (OperationCanceledException)
         {
@@ -72,13 +98,85 @@ public sealed class HttpHealthProbe : IHealthProbe
 
             // A fixed message, because the exception text could reveal details about internal hosts.
             string failureReason = "Connection, DNS or TLS failure.";
-            return new ProbeResult(ServiceStatus.Down, null, stopwatch.ElapsedMilliseconds, failureReason);
+            CertificateCheck? certificate = ReadCertificateOfFailure(hostWithEntry, exception);
+            hostWithEntry = null;
+
+            return new ProbeResult(ServiceStatus.Down, null, stopwatch.ElapsedMilliseconds, failureReason, null, certificate);
         }
         catch (ServiceValidationException)
         {
             // Unknown and not Down: the URL was rejected before any request was sent.
             return new ProbeResult(ServiceStatus.Unknown, null, stopwatch.ElapsedMilliseconds, "URL rejected by destination policy.");
         }
+        finally
+        {
+            // In finally, so that a timeout or any other way out also removes the entry. A later check of
+            // the same host would otherwise be able to read it.
+            if (hostWithEntry != null)
+            {
+                _recorder.Take(hostWithEntry);
+            }
+        }
+    }
+
+    // A response was received, so the certificate was accepted on this connection. Whatever the entry
+    // says, this can only give a date or say that nothing was seen, and never that it was invalid.
+    private CertificateCheck ReadCertificateOfResponse(Uri uri)
+    {
+        if (uri.Scheme != Uri.UriSchemeHttps)
+        {
+            return new CertificateCheck(null, SecurityHeaderReader.NotHttpsReason);
+        }
+
+        TlsHandshake? handshake = _recorder.Take(uri.IdnHost);
+
+        if (handshake == null || handshake.NotAfterUtc == null)
+        {
+            return new CertificateCheck(null, NoNewHandshakeReason);
+        }
+
+        return new CertificateCheck(handshake.NotAfterUtc, null);
+    }
+
+    // Security-critical: both conditions are needed. An entry can come from another check of the same
+    // host, so it says nothing about this check's own failure unless that failure was a TLS failure.
+    private CertificateCheck? ReadCertificateOfFailure(string? host, HttpRequestException exception)
+    {
+        if (host == null)
+        {
+            return null;
+        }
+
+        TlsHandshake? handshake = _recorder.Take(host);
+
+        if (handshake == null || !handshake.IsRejected)
+        {
+            return null;
+        }
+
+        if (!WasTlsFailure(exception))
+        {
+            return null;
+        }
+
+        return new CertificateCheck(null, CertificateNotValidReason);
+    }
+
+    private static bool WasTlsFailure(HttpRequestException exception)
+    {
+        Exception? current = exception;
+
+        while (current != null)
+        {
+            if (current is AuthenticationException)
+            {
+                return true;
+            }
+
+            current = current.InnerException;
+        }
+
+        return false;
     }
 
     // HttpClient wraps an exception from the connection step in its own HttpRequestException, so the

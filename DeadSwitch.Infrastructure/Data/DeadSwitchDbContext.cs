@@ -1,5 +1,6 @@
 using DeadSwitch.Domain;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace DeadSwitch.Infrastructure.Data;
 
@@ -58,6 +59,14 @@ public class DeadSwitchDbContext : DbContext
             .HasConversion(
                 time => time,
                 stored => DateTime.SpecifyKind(stored, DateTimeKind.Utc));
+
+        // The same reason as above. EF Core never passes null to a conversion, so a converter between
+        // plain DateTime values also works on this nullable column, and null stays NULL.
+        modelBuilder.Entity<CheckRecord>()
+            .Property(record => record.CertificateNotAfterUtc)
+            .HasConversion(new ValueConverter<DateTime, DateTime>(
+                time => time,
+                stored => DateTime.SpecifyKind(stored, DateTimeKind.Utc)));
 
         // Cascade: deleting a service also deletes its check records in the database.
         modelBuilder.Entity<CheckRecord>()

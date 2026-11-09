@@ -58,6 +58,10 @@ builder.Services.AddDbContext<DeadSwitchDbContext>(options =>
 builder.Services.AddScoped<IMonitoredServiceRepository, MonitoredServiceRepository>();
 builder.Services.AddScoped<MonitoredServiceService>();
 
+// Singleton, because the factory replaces the handler now and then, and the probe must be able to read
+// what the handler noted.
+builder.Services.AddSingleton<TlsHandshakeRecorder>();
+
 builder.Services.AddHttpClient<IHealthProbe, HttpHealthProbe>(client =>
 {
     // HttpClient's default limit of 100 seconds is turned off, because every service has its
@@ -66,7 +70,7 @@ builder.Services.AddHttpClient<IHealthProbe, HttpHealthProbe>(client =>
     client.DefaultRequestHeaders.UserAgent.ParseAdd("DeadSwitch/1.0");
 })
     // Security-critical: the handler is what blocks private addresses and redirects.
-    .ConfigurePrimaryHttpMessageHandler(() => ProtectedHttpHandler.Create())
+    .ConfigurePrimaryHttpMessageHandler(CreateProbeHandler)
     // Removes HttpClient's automatic logging, which writes every URL to the log on every check.
     .RemoveAllLoggers();
 
@@ -173,6 +177,12 @@ ServiceEndpoints.Map(app);
 app.Lifetime.ApplicationStarted.Register(() => LocalOnlyCheck.StopIfListeningBeyondLoopback(app));
 
 app.Run();
+
+static HttpMessageHandler CreateProbeHandler(IServiceProvider services)
+{
+    TlsHandshakeRecorder recorder = services.GetRequiredService<TlsHandshakeRecorder>();
+    return ProtectedHttpHandler.Create(recorder);
+}
 
 // no-cache means "ask the server first", so that a browser never keeps running an old script.
 static void RequireCheckBeforeReuse(StaticFileResponseContext file)
