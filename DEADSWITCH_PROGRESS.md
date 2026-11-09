@@ -10,9 +10,9 @@ DeadSwitch is a personal uptime monitor. The backend is **not finished**: see th
 
 | Project | Contains | References |
 |---|---|---|
-| `DeadSwitch.Domain` | `MonitoredService`, `CheckRecord`, `ServiceStatus`, `StatusChangeRule`, `SecurityHeaderRule` | nothing |
-| `DeadSwitch.Application` | `MonitoredServiceService`, `ServiceOverview`, `ServiceConfiguration`, `UrlSafety`, `ServiceLocks`, `ServiceValidationException`, `CheckInProgressException`, `NotificationFailedException`, `StatusChange`, `SecurityHeaderCheck`, interfaces including `INotifier` | Domain |
-| `DeadSwitch.Infrastructure` | `DeadSwitchDbContext`, repository, `HttpHealthProbe`, `SecurityHeaderReader`, `ProtectedHttpHandler`, `PublicInternetConnector`, `DestinationBlockedException`, `DiscordNotifier`, `DiscordMessage`, `DiscordOptions`, `DiscordWebhookUrl`, migrations | Application, Domain |
+| `DeadSwitch.Domain` | `MonitoredService`, `CheckRecord`, `ServiceStatus`, `StatusChangeRule`, `SecurityHeaderRule`, `CertificateExpiryRule` | nothing |
+| `DeadSwitch.Application` | `MonitoredServiceService`, `ServiceOverview`, `ServiceConfiguration`, `UrlSafety`, `ServiceLocks`, `ServiceValidationException`, `CheckInProgressException`, `NotificationFailedException`, `StatusChange`, `SecurityHeaderCheck`, `CertificateCheck`, interfaces including `INotifier` | Domain |
+| `DeadSwitch.Infrastructure` | `DeadSwitchDbContext`, repository, `HttpHealthProbe`, `SecurityHeaderReader`, `TlsHandshakeRecorder`, `TlsHandshake`, `ProtectedHttpHandler`, `PublicInternetConnector`, `DestinationBlockedException`, `DiscordNotifier`, `DiscordMessage`, `DiscordOptions`, `DiscordWebhookUrl`, migrations | Application, Domain |
 | `DeadSwitch.Api` | Startup in `Program.cs`, `ServiceEndpoints`, `RegisterServiceRequest`, `UpdateServiceRequest`, `UtcDateTimeOffsetConverter`, `MonitoringWorker`, `SecurityHeaders`, `CrossSiteRequests`, `LocalOnlyCheck`, and the dashboard in `wwwroot` | Application, Domain, Infrastructure |
 | `DeadSwitch.Tests` | Automated tests | Api, and the other projects through it |
 
@@ -62,7 +62,18 @@ A `404` has an empty body. A host name that is not allowed gets a `400` from the
 | Not assessed | null | null | `Not an HTTPS address.`, `The response was a redirect.` or `The response was not a success.` |
 | No response, or a record older than this feature | null | null | null |
 
-**`GET /services/overview`.** Each row has `id`, `name`, `url`, `currentStatus`, `lastKnownStatus`, `lastCheckedAt`, `isEnabled`, `responseTimeMs`, `failureReason`, `securityGrade`, `missingSecurityHeaders` and `securityNotAssessedReason`. The values from `responseTimeMs` and on come from the newest check record, and are null when `lastCheckedAt` is null. That condition matters: a new URL empties `lastCheckedAt` but keeps the history, so without it a row would show the response time of the old address, also after changing back to an earlier URL.
+**The certificate of a check.** A check record, and so `POST /services/{id}/check` and the history, has two more fields. `GET /check` and `GET /services/{id}/check` are unchanged.
+
+| Case | `certificateNotAfterUtc` | `certificateNotAssessedReason` | Status and grade |
+|---|---|---|---|
+| A response, and a fresh accepted handshake for the host | The date, in UTC with `Z` | null | As before |
+| A response, and no handshake could be read for this check | null | `No new TLS handshake for this check.` | As before. Never invalid |
+| No response, the check's own failure is a TLS failure, and a fresh rejected handshake exists for the host | null | `The certificate was not valid.` | DOWN, no grade |
+| No response, a TLS failure, but no matching handshake | null | null | DOWN, not called invalid |
+| A timeout, a connection failure, a blocked address, or a record older than this feature | null | null | As before |
+| `http` | null | `Not an HTTPS address.` | As before |
+
+**`GET /services/overview`.** Each row has `id`, `name`, `url`, `currentStatus`, `lastKnownStatus`, `lastCheckedAt`, `isEnabled`, `responseTimeMs`, `failureReason`, `securityGrade`, `missingSecurityHeaders`, `securityNotAssessedReason`, `certificateNotAfterUtc`, `certificateDaysLeft`, `certificateExpiryText` and `certificateNotAssessedReason`. `certificateDaysLeft` is counted from now, rounded down, and is negative after the date has passed. `certificateExpiryText` is `Expired`, `Expires today`, `1 day left` or `N days left`. The certificate values only come from the newest check, so an older date is never shown after a check that saw no valid certificate. The values from `responseTimeMs` and on come from the newest check record, and are null when `lastCheckedAt` is null. That condition matters: a new URL empties `lastCheckedAt` but keeps the history, so without it a row would show the response time of the old address, also after changing back to an earlier URL.
 
 **Security headers.** Every answer from the application has the headers listed under "The dashboard" in the security notes, JSON and errors included.
 
@@ -105,6 +116,7 @@ dotnet run --project DeadSwitch.Api --launch-profile http -- --Discord:WebhookUr
 | `MakeCurrentStatusRequired` | Makes `CurrentStatus` NOT NULL with the default `UNKNOWN`. Rows with NULL become `UNKNOWN`, other values and all check records are kept. SQLite rebuilds the table for this, with foreign keys turned off around the drop so that the cascade does not delete the history |
 | `AddLastKnownStatusToMonitoredService` | Adds the nullable `LastKnownStatus` and copies `CurrentStatus` into it where that is `UP` or `DOWN`, so that an existing service does not lose its next change. `UNKNOWN` stays NULL. `CurrentStatus` cannot do this job: after UP, UNKNOWN, DOWN it no longer remembers that the service was up |
 | `AddSecurityHeadersToCheckRecords` | Adds the nullable text columns `SecurityGrade`, `MissingSecurityHeaders` and `SecurityNotAssessedReason` to `CheckRecords`. Existing rows get NULL, which means that nothing was assessed. No data is rewritten |
+| `AddCertificateToCheckRecords` | Adds the nullable columns `CertificateNotAfterUtc` and `CertificateNotAssessedReason` to `CheckRecords`. Existing rows get NULL, which means that no certificate was assessed. No data is rewritten |
 
 The application does not run migrations at startup. Run `dotnet ef database update` when setting up a database, and after pulling a new migration: without it, reading a service fails because the column is missing. `MakeCurrentStatusRequired` has run in the tests and from empty against a separate database file, but not against the local development database. Run the command there as well.
 
@@ -117,12 +129,13 @@ Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, s
 Date: 2026-11-09.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
-- `dotnet test DeadSwitch.slnx`: 897 passed, 0 failed, on the final code.
+- `dotnet test DeadSwitch.slnx`: 1015 passed, 0 failed, on the final code.
+- 118 of the tests come from the TLS certificate: 23 test the recorder directly, 9 use the real connector and handler over HTTPS on `127.0.0.1`, 28 use the real probe with a stand-in for the network, 12 use the real probe over real TLS with a local connection step, 6 use the API and the database, 15 test the expiry rule, 12 test the overview, 10 read the dashboard's files as text, 1 tests the migration and 2 test the registered handler. No automated test reaches a real website.
 - 76 of the tests come from the security headers: 27 test the reader directly, 9 use the real handler against a local server on `127.0.0.1`, 8 use the real probe with a stand-in for the network, 9 use the API with a fake or scripted probe, 7 test the rule, 15 read the dashboard's files as text, and 1 tests the migration. No automated test reaches a real website.
 - 198 of the tests come from phase 5: 14 test the overview route, 37 the files and the headers, 51 read the dashboard's files as text, 70 test cross-site requests and host names, and 26 test the local-only check. No test runs the JavaScript.
 - 470 of the tests come from phase 1: 162 only classify URLs and IP addresses, 17 run the real connection code against a local server, 16 test the probe with a stub handler, 11 run the real probe and handler with a fake DNS, 7 test `ServiceLocks` directly, 134 test unusual host names through the API, the worker and the real probe with a fake probe or a fake DNS, and 123 use the API, the worker or the migrations with a fake probe and an in-memory database.
 - 153 come from phase 2: 60 classify webhook addresses, 12 test the rule directly, 29 test the real notifier with a stub handler, 2 test the registered handler against a local server, 13 run the real registration with a stub handler, 36 use the API, the worker or the migrations with a fake notifier, and 1 reads the settings files.
-- Without the 68 tests that carry the trait `NameLookupWithoutConnector`: 753 passed.
+- Without the 68 tests that carry the trait `NameLookupWithoutConnector`: 947 passed.
 - No test sends anything to Discord. Real messages are confirmed by the owner's run; see "Manual run".
 
 ### Readability changes without new behaviour
@@ -141,6 +154,104 @@ Not shown by this comparison:
 - `CheckUrlTimeoutSeconds` and `DefaultHistoryTake`: the first needs a real outgoing check and the second more than 50 records, so these values were only read in the diff.
 - A check through `POST`, `GET /services/{id}/check` or the worker against a real website. These are covered by tests with a fake probe.
 - That the comparison would have noticed a changed value. It was not run against code broken on purpose.
+
+### Cost of reused connections
+
+A certificate is only visible during a handshake, so a reused connection has nothing to read. Measured once against a local server on `127.0.0.1`, with a 2048-bit RSA certificate, 200 requests per row, in two passes in opposite order. The two values are the two passes.
+
+| Alternative | Median ms | 95th percentile ms | Memory per request | Handshakes | Connections |
+|---|---|---|---|---|---|
+| Pooling, as before | 0.14 / 0.09 | 0.22 / 0.15 | 2 KB | 1 of 200 | 1 |
+| `ConnectionClose` | 6.09 / 5.56 | 7.19 / 6.49 | 32 / 28 KB | 200 | 200 |
+| `PooledConnectionLifetime = 0` | 5.84 / 5.61 | 7.00 / 6.63 | 29 KB | 200 | 200 |
+| A new handler per check | 6.03 / 6.02 | 7.67 / 7.27 | 33 KB | 200 | 200 |
+
+`ConnectionClose` was chosen because it keeps one handler and only affects the probe. This is local CPU time and says nothing about the network. The memory figure covers the whole process, the local server included. The measuring code was removed and never committed.
+
+In the same run, `Uri.IdnHost` and `SslStream.TargetHostName` held the same text for an IPv4 address, an IPv6 address, an ordinary name, upper case, a trailing dot and an IDN name.
+
+### Red runs of the TLS certificate
+
+Each group ran before the real code was written.
+
+| Tests | Run against | Failed | Could not be red |
+|---|---|---|---|
+| The recorder and the real connector over HTTPS, 32 tests | A callback that accepts everything and a recorder that keeps nothing | 23 | 9 expect nothing saved, a refused address, or describe the handler |
+| The probe, the storage, the migration and the registered handler, 49 tests | The fields and migration in place, a probe that reads no certificate, no mapping and no registration | 36 | 13 expect no certificate, or that a request is blocked. Proven by the mutations below |
+| The rule, the overview and the dashboard's files, 37 new tests | A rule that always answers 0 and an empty text, empty overview fields, and a page without the new parts | 30 | 7 rows expect 0, empty fields or a word that is absent |
+
+### Mutation check of the TLS certificate
+
+The code was broken on purpose, one change at a time, running all tests and restoring the file from a copy outside the repository. The sha256 of every file was compared after every restore, and all matched. The changes were never committed. All of them ran against a stand-in for the network or `127.0.0.1`, and none of them touched `ConnectCallback` or `PublicInternetConnector`.
+
+| Change | Failing tests |
+|---|---|
+| The callback always returns true | 15 |
+| Everything counts as valid | 15 |
+| Chain errors are accepted | 7 |
+| A name mismatch is accepted | 3 |
+| Nothing is saved for a valid certificate | 22 |
+| A rejected certificate saves its date | 7 |
+| `NotBefore` instead of `NotAfter` | 12 |
+| Local time instead of UTC | 12 |
+| `catch (CryptographicException)` removed | 0; see below |
+| A missing certificate that passed counts as rejected | 1 |
+| `ConnectionClose` removed | 3 |
+| HTTP/2 requested | 4 |
+| `RequestVersionOrHigher` | 4 |
+| The `VersionPolicy` line removed | 1 |
+| A rejected entry makes a response invalid | 4 |
+| A rejected entry makes a response DOWN | 17 |
+| The `AuthenticationException` requirement removed | 1 |
+| A rejected entry is not read on a TLS failure | 3 |
+| The `Take` in `finally` removed | 4 |
+| `Take` does not remove the entry | 10 |
+| The maximum age check removed | 2 |
+| Maximum age 4 minutes | 3 |
+| Maximum age 2 minutes | 2 |
+| Nothing seen counts as invalid | 7 |
+| A missing entry on a failure counts as invalid | 3 |
+| A host without an entry gets a rejected entry | 15 |
+| The overview searches back for a date | 3 |
+| The `Expired` branch removed | 5 |
+| The `Expired` limit becomes `<= 0` | 3 |
+| The `Expired` limit becomes `< -1` | 3 |
+| `DaysLeft` off by one | 15 |
+| `DaysLeft` rounds up | 6 |
+| Hosts are not lower-cased | 2 |
+| A trailing dot is not removed | 2 |
+| `Store` does not normalise the host | 3 |
+| `Take` does not normalise the host | 3 |
+| `DnsSafeHost` instead of `IdnHost` | 2 |
+| A rejected certificate gives UP | 24 |
+| A rejected certificate gets a grade | 4 |
+| The limit of entries removed | 1 |
+| Old entries are not cleared | 1 |
+| A full recorder refuses a known host | 1 |
+| The production code sets a chain policy | 2 |
+| The callback is not set on the handler | 19 |
+| `Program.cs` uses the handler without a recorder | 1 |
+| The record does not get the date | 9 |
+| The record does not get the reason | 4 |
+| The overview does not get the date | 1 |
+| The overview does not get the days | 6 |
+| The overview does not get the text | 7 |
+| The overview does not get the reason | 2 |
+| The days are counted from the check and not from now | 1 |
+| The migration lacks the reason column | 183, because reading a record then fails |
+| The date is not marked as UTC when read | 2 |
+| `innerHTML` instead of `textContent` | 1 |
+| The certificate cell removed | 2 |
+| The certificate details cell removed | 2 |
+| The certificate column removed | 2 |
+| The certificate details column removed | 2 |
+| The script uses the number of days | 2 |
+| `Not assessed` changed in the certificate cell | 0; see below |
+
+The rows with 0 failing tests:
+
+- `catch (CryptographicException)`: no test can make `NotAfter` throw during a real handshake. The catch stays because an exception there would fail the handshake, and only the validation may decide that.
+- `Not assessed` in the certificate cell: the search only finds that the text exists in the script, and the security grade cell holds the same text. This is a real gap in a text search, and only a browser shows the right text in this cell.
 
 ### Red runs of the security headers
 
@@ -695,9 +806,13 @@ This is one run in one browser, against sites whose headers can change.
 
 ### Not run manually
 
+TLS certificate, not run manually at all so far:
+
+- A check against any real website, so real certificate chains, real expired certificates and the network cost of a new connection per check are only described, not measured.
+- The new columns in the page in a real browser, including `Expired`. A real run would need a date that has passed in the database.
+
 Security headers:
 
-- An automated test of the whole chain over HTTPS. The owner's run above covers it by hand; the automated part comes in task 2.
 - Old rows in a real upgraded database. The migration is proven by a test with an in-memory database and was run from empty against a separate file.
 - Whether a grade is fair for the values of the headers. Only their presence is assessed.
 
@@ -783,6 +898,16 @@ The automated tests still cover a redirect in two separate parts, because `UrlSa
 - Grade, missing names and reason are saved per check, and shown in the history and the overview. A new URL empties them in the overview. Older records stay and have empty fields.
 - Nothing a server sends reaches any answer: a hostile value in the headers and a `Location` value are absent from the check, the history and the overview. A response header section over 64 KB is refused.
 
+- HTTPS through the real connector and the real handler on `127.0.0.1`: a valid certificate gives its date, and an expired, wrongly named or untrusted one is refused before the server gets a request. The trust is set by each test on its own handler, and the registered handler trusts nothing extra and still blocks `127.0.0.1`.
+- The certificate callback answers exactly as the framework does for every combination of errors.
+- The real probe over real TLS: date and grade from one response, DOWN with no grade for a bad certificate, one handshake per check, and HTTP/1.1 with `Connection: close` as seen by the server.
+- A note in the recorder can never make a received response invalid or DOWN. "Invalid" needs no response, the check's own `AuthenticationException` and a fresh rejected note.
+- The recorder's note is removed on every way out of an https check, and a note older than 3 minutes is not used.
+- Two checks of the same host at the same time, and `GET /check` next to a saved check, are never called invalid.
+- The host is found written with upper case, a trailing dot and IDN, also directly in the recorder and in both directions.
+- The overview takes the certificate from the newest check only, and the limits -1, 0 and 1 give the right text with a fake clock.
+- Nothing from a certificate reaches an answer, the log or a notification, with a hostile subject.
+
 Dependency injection lifetimes were reviewed by reading the code only.
 
 ## MVP status
@@ -795,13 +920,14 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | No overlapping checks | Partial | Protects a single process only; see the lock limitation below |
 | Status UP / DOWN / UNKNOWN | Done | Proven by tests. A 3xx from a real website is confirmed by a manual run |
 | History endpoint | Done | Proven by tests, with `Z` on every time, and confirmed by a manual run after a real check |
-| SSRF protection | Done for HTTP | Proven by tests against a local server. HTTPS through the connector is untested; see the security notes |
+| SSRF protection | Done | Proven by tests against a local server, over HTTP and HTTPS |
 | Tests for all of the above | Done for phase 1 | The limits are listed under "Not proven by a test" and "Never run so far" |
 | Notification on UP to DOWN and DOWN to UP | Done | Both directions are proven by tests with a fake notifier and a stub. A manual run confirms real messages for UP to DOWN and for DOWN on a new URL. DOWN to UP has not been run manually |
 | `INotifier` with a Discord webhook | Done | Proven by tests, and confirmed by a manual run against a real channel. A wrong token from Discord and notifications turned off have not been run manually with a real send |
 | Webhook address outside git | Done | Proven by tests of the settings files and the log. A manual run confirms the secret is read, and that the log holds no address after a real send |
 | Dashboard (phase 5, not part of the MVP) | Done | The server side is proven by tests and a run against the real server, and the page by the owner's run in Chrome. Step D (`eval`) and the visible failure message are not confirmed on the screen |
-| Security headers with a grade, saved per check | Done | Proven by tests and by the owner's run against real websites in Chrome. Not tested: the whole chain over HTTPS in an automated test, old rows in a real upgraded database, and whether a grade is fair for the values. The warning when a header disappears comes in task 3 |
+| Security headers with a grade, saved per check | Done | Proven by tests and by the owner's run against real websites in Chrome. Not tested: old rows in a real upgraded database, and whether a grade is fair for the values. The warning when a header disappears comes in task 3 |
+| Certificate expiry saved per check, days left on the dashboard | Partial | Proven by tests against a local server. Not yet run against a real website or seen in a browser. The warning when few days remain comes in task 3 |
 | README | Missing | |
 | GitHub Actions | Missing | Waits for the owner's approval |
 
@@ -866,7 +992,10 @@ Check records saved before this rule keep their old status: an earlier 3xx stays
 - The browser asks for `favicon.ico`, which does not exist and is refused by the policy, so one line in the console is expected.
 - A security grade measures whether five headers are present, not whether their values are good. `Strict-Transport-Security: max-age=0` and a policy with `unsafe-inline` both count. Every header weighs the same, and a site with `frame-ancestors` but no `X-Frame-Options` counts as missing one.
 - A service that answers with a redirect or over `http` never gets a grade, and only the page itself can be assessed: the target of a redirect is not visited.
-- No automated test grades a real HTTPS response through the whole chain. The parts are tested separately: a stand-in with `https`, and the real handler over `http` on loopback. Automated HTTPS comes in task 2.
+- No single automated test runs the connector and the probe together over HTTPS, because the production rules stop loopback addresses and other ports. One group runs the real connector and handler, and another the real probe and handler with a local connection step.
+- A probe check always opens a new connection, so `responseTimeMs` always includes TCP and TLS. Before, a check within a minute of the last one could reuse a connection.
+- The certificate note is kept per host and not per port or per check, because the callback cannot see either. `https://host:443` and `https://host:80` checked at the same moment could get each other's date. Two checks of the same host at the same moment share a note, so one of them can show that nothing was seen. Neither can affect the validation or the status.
+- A certificate's revocation is not checked, the same as before this feature. A certificate that fails validation shows no date, so the dashboard cannot say when an already invalid certificate expired.
 - `LocalOnlyCheck` runs after the server has started, so a wrong port is open for a moment. Enabled services can start a check in that moment as well.
 
 ## Code style exceptions
@@ -903,8 +1032,14 @@ Layer 1 and the connection now judge the same name:
 Checked as settings only, **not by running them**:
 - `UseProxy = false` and `PooledConnectionLifetime`. `ConnectTimeout` is not checked at all.
 
+The TLS certificate:
+- No new way out. The certificate is read by a callback on the probe's own handler, during the handshake of the connection that carries the request. There is no separate `TcpClient` or `SslStream`, and `PublicInternetConnector` was not changed.
+- Certificate validation is never turned off. The callback only takes notes and answers `errors == SslPolicyErrors.None`, which is the framework's own rule when no callback is set.
+- The application has no setting for trust. A test sets `CertificateChainPolicy` on a handler it built itself through an internal method, and two tests prove that the registered handler has none.
+- A certificate is written by whoever made it, so only a date is kept and no text. The reasons are our own fixed texts of at most 64 characters.
+- Ending every check's connection also means that the address is checked again on every check, for the probe. The window of 2 minutes on a reused connection no longer applies to it.
+
 Not proven by a test:
-- HTTPS through the connector. A test would have to change the certificate validation in the handler it is testing. To be covered in phase 3.
 - That the socket is closed when a connection attempt is cancelled.
 - That looking up `localhost` stays on the machine. The tests assume this and it has not been measured.
 
@@ -987,7 +1122,7 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes early so that every new feature is visible in it at once. The MVP still covers phases 1 to 4; the dashboard is built earlier but is not part of the MVP. Each task is one branch, with a plan approved first.
 
-**Next step:** the owner reviews and merges `refactor/readability`. After that comes `feat/tls-certificate`, with a plan approved first; see "Phase 3: Security checks".
+**Next step:** the owner runs the manual test of `feat/tls-certificate`, reviews and merges it. After that comes `feat/security-warnings`, with a plan approved first; see "Phase 3: Security checks".
 
 ### Phase 1: Stable foundation
 
@@ -1062,7 +1197,7 @@ Requirements for the later tasks:
 | 3 | A service going to UNKNOWN can mean that its name now points to a private address. Phase 2 decided on a warning in the log and no message, because nothing was learned about the service | Consider a notification of its own in phase 3 |
 | 3 | 3xx counts as UP and is not followed, so `http://example.com` answering 301 gives only the redirect's headers and no certificate. That would produce a misleading grade and false alarms | Decided: only `https` with a 2xx gets a grade. Everything else gets a fixed reason and no grade |
 | 3 | Save the redirect target (`Location`) and warn when it suddenly points to another domain, because that can mean the site has been hijacked. The value comes from the monitored server and can contain internal addresses, so how it is stored and shown must be decided | Not decided and not built. Starting point: never follow the value, compare only the host, show it as plain text and never as a link, and hide a target that is not a public address. Legitimate moves, such as a new login domain or CDN, can cause false alarms |
-| 3 | A certificate is only visible during the TLS handshake, and a reused connection does no new handshake. "On each check" therefore does not work with pooled connections | Either turn off pooling for the probe, which also rechecks the address on every check, or use the most recently seen certificate. The cost of the first option has not been measured |
+| 3 | A certificate is only visible during the TLS handshake, and a reused connection does no new handshake. "On each check" therefore does not work with pooled connections | Decided: the probe asks for a new connection on every check with `Connection: close` over HTTP/1.1. The local cost was measured; see "Cost of reused connections". A check that still sees no handshake says so and is not called invalid |
 | 4 | Docker tooling licence | Not settled. Nothing is installed until the licence has been confirmed |
 | 4 | Inside a container the application must listen on `0.0.0.0`, which `LocalOnlyCheck` refuses. Compose binds to `127.0.0.1` on the host, which the check cannot see | The check must be turned off explicitly in the container. No such setting exists yet. `AllowedHosts` keeps working, as the browser still sends `localhost` |
 | 6 | With a login the check, `AllowedHosts` and the block of other sites must be looked at again, as a real host name and other origins may then be valid | Decide with the login |
