@@ -884,6 +884,22 @@ Built on `feat/dashboard` and merged. The server side is verified by tests, and 
 - All network traffic goes through the same SSRF protection as the health check. No new ways out.
 - The new values are added to the dashboard.
 
+The phase is built as four tasks, one branch each, in this order:
+
+| Task | Branch | Content | Part of the MVP |
+|---|---|---|---|
+| 1 | `feat/security-headers` | Read the five headers, give a grade, save it per check, show it in the API and the dashboard | Yes |
+| 2 | `feat/tls-certificate` | Read and save the certificate's expiry date, the first automated HTTPS test through the connector, days left in the dashboard | Yes |
+| 3 | `feat/security-warnings` | Warnings through `INotifier`: a certificate about to expire (configurable, default 14 days) and a header that has disappeared since the previous check | Yes |
+| 4 | `feat/redirect-target` | Save `Location` safely and warn when the host moves to another domain | No, can be postponed |
+
+Headers come first because they are already in the response the probe receives, so nothing about how connections are opened has to change. The certificate is the only task that changes the connection step. The warnings compare data that the first two tasks save.
+
+Requirements for the later tasks:
+
+- **Task 2:** Certificate validation must never be turned off. An invalid certificate must give no grade. A certificate that is missing on a reused connection must not be read as invalid. A test that needs HTTPS must trust only its own test certificate, set from the test, and production code must have no setting for it.
+- **Task 4:** `Location` must never be sent unprocessed to Discord or to the logs, and is shown as text only, never as a clickable link.
+
 ### Phase 4: DevOps
 
 - GitHub Actions: build and test on every push and pull request.
