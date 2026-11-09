@@ -161,10 +161,10 @@ public static class ServiceEndpoints
             name,
             url = record.Url,
             status = record.Status,
-            record.StatusCode,
-            record.ResponseTimeMs,
+            statusCode = record.StatusCode,
+            responseTimeMs = record.ResponseTimeMs,
             lastCheckedAt = record.CheckedAtUtc,
-            record.FailureReason
+            failureReason = record.FailureReason
         });
     }
 
@@ -181,9 +181,9 @@ public static class ServiceEndpoints
         {
             url,
             status = result.Status,
-            result.StatusCode,
-            result.ResponseTimeMs,
-            result.FailureReason
+            statusCode = result.StatusCode,
+            responseTimeMs = result.ResponseTimeMs,
+            failureReason = result.FailureReason
         });
     }
 }
