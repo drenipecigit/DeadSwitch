@@ -1,6 +1,6 @@
 # DeadSwitch progress
 
-Updated: 2026-11-05.
+Updated: 2026-11-09.
 
 DeadSwitch is a personal uptime monitor. The backend is **not finished**: see the MVP status below.
 
@@ -553,7 +553,23 @@ Run against the real server (Kestrel) on 2026-11-05 for the dashboard, with its 
 - A service named `<img src=x onerror=alert(1)>` was saved, and came back unchanged from `/services/overview`.
 - Listening on a Unix domain socket made `LocalOnlyCheck` write its text and stop the application with exit code 1. This is the real server reporting a real address that is not loopback, without opening a port on the network.
 
-These requests came from `curl` and Windows PowerShell 5.1, with the headers set by hand. They show the server, not what a browser sends. The browser run is still to be done; see below.
+These requests came from `curl` and Windows PowerShell 5.1, with the headers set by hand. They show the server, not what a browser sends. The run below is in a real browser.
+
+Done by the owner on 2026-11-05 in Chrome against the real server (Kestrel), with its own database file, the worker off and Discord off through the argument `-- --Discord:WebhookUrl=`:
+
+| Step | What was done | Result |
+|---|---|---|
+| A | `Get-NetTCPConnection` | Listening on `127.0.0.1` and `::1` only |
+| B | A service named `<img src=x onerror=alert(1)>` and a URL containing `<img ...>` | Both shown as text, no alert, `document.images.length` gave 0, and both rows had `Paused` |
+| C | Response headers of the document | CSP with the exact value, `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cache-Control: no-cache`, and 304 on reload |
+| D | `eval` in the page | **Not run** |
+| E | `innerHTML` set to `<img src=x onerror=alert(3)>` in the Console | No alert and two CSP errors: the inline event handler blocked by `script-src 'self'`, and the image blocked by `default-src 'none'` |
+| F | `POST /services/{id}/check` with the page open | The row showed UP, UP, 117 ms and local time 11:11:12 (UTC 10:11:12Z), without a reload |
+| G | The server was stopped, then started again | The Console showed `ERR_CONNECTION_REFUSED` on `/services/overview` every 10 seconds, so the page kept trying. After the restart the page updated again. The failure message was **not seen** on the screenshot, because DevTools covered the page |
+| H | A form `POST` and a link `GET` from a `file://` page | Both gave 403 `Request blocked` with the fixed text. The history held 1 record afterwards, the one from step F |
+| I | `Host: evil.example` | 400 |
+
+This is one run in one browser. Step E was typed by hand in the Console, so it shows that the browser obeys the policy, not that the page's own code is free of mistakes. Step H shows the 403 from a `file://` page, and which of `Sec-Fetch-Site` and `Origin` caused it was not read.
 
 ### Not run manually
 
@@ -563,12 +579,11 @@ Proven by tests only, and not confirmed against the real Discord:
 - A wrong token: the check is saved and the log shows the status code.
 - Notifications turned off with an empty address, during a run with a status change. The startup line and the application starting were confirmed on the real server without any check.
 
-Not yet confirmed in a browser. **The JavaScript has never been run:**
+Not confirmed on the screen in the browser run above:
 
-- That the page draws its rows, shows local time, and updates by itself.
-- That the name `<img src=x onerror=alert(1)>` is shown as text and runs nothing.
-- That the browser obeys the policy, and sends `Sec-Fetch-Site` to `localhost`.
-- That the failure message appears when the API stops, and goes away when it returns.
+- That `eval` is refused by the policy (step D was not run).
+- That the failure message becomes visible when the API stops, and goes away when it returns. The page kept trying and updated again, but the message itself was hidden behind DevTools on the screenshot.
+- Which headers the browser sends to `localhost`.
 
 ### Never run so far
 
@@ -652,7 +667,7 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | Notification on UP to DOWN and DOWN to UP | Done | Both directions are proven by tests with a fake notifier and a stub. A manual run confirms real messages for UP to DOWN and for DOWN on a new URL. DOWN to UP has not been run manually |
 | `INotifier` with a Discord webhook | Done | Proven by tests, and confirmed by a manual run against a real channel. A wrong token from Discord and notifications turned off have not been run manually with a real send |
 | Webhook address outside git | Done | Proven by tests of the settings files and the log. A manual run confirms the secret is read, and that the log holds no address after a real send |
-| Dashboard (phase 5, not part of the MVP) | Partial | The server side is proven by tests and a run against the real server. The JavaScript has not been run; it waits for the owner's run in a browser |
+| Dashboard (phase 5, not part of the MVP) | Done | The server side is proven by tests and a run against the real server, and the page by the owner's run in Chrome. Step D (`eval`) and the visible failure message are not confirmed on the screen |
 | README | Missing | |
 | GitHub Actions | Missing | Waits for the owner's approval |
 
@@ -831,7 +846,7 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes early so that every new feature is visible in it at once. The MVP still covers phases 1 to 4; the dashboard is built earlier but is not part of the MVP. Each task is one branch, with a plan approved first.
 
-**Next step:** the owner runs the dashboard in a browser, reviews and merges `feat/dashboard`. After that comes phase 3, with a plan approved first.
+**Next step:** phase 3, one task at a time; see "Phase 3: Security checks".
 
 ### Phase 1: Stable foundation
 
@@ -855,7 +870,7 @@ Built on `feat/discord-notifications` and confirmed by the owner's manual run, e
 
 ### Phase 5: Dashboard
 
-Built on `feat/dashboard`. The server side is verified; the JavaScript waits for the owner's run in a browser.
+Built on `feat/dashboard` and merged. The server side is verified by tests, and the page by the owner's run in Chrome, except for the parts listed under "Not run manually".
 
 - A simple web page showing all services, status and response time. Phase 3 adds certificate days left and header grade to it.
 - The dashboard runs locally only until the authentication in phase 6 is done.
