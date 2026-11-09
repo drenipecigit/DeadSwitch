@@ -20,4 +20,6 @@ public record ServiceOverview(
     DateTime? CertificateNotAfterUtc,
     int? CertificateDaysLeft,
     string? CertificateExpiryText,
-    string? CertificateNotAssessedReason);
+    string? CertificateNotAssessedReason,
+    RedirectFinding? RedirectFinding,
+    string? RedirectTargetHost);

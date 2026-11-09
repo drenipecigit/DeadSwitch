@@ -41,6 +41,21 @@ internal static class TestProbeResults
         return new ProbeResult(ServiceStatus.Up, statusCode, 12, null, headers, certificate);
     }
 
+    public static ProbeResult NoRedirect()
+    {
+        return new ProbeResult(ServiceStatus.Up, 200, 12, null, null, null, new RedirectTargetCheck(RedirectFinding.NoRedirect, null));
+    }
+
+    public static ProbeResult Redirect(RedirectFinding finding, string? host)
+    {
+        return new ProbeResult(ServiceStatus.Up, 301, 12, null, HeadersNotAssessed(), null, new RedirectTargetCheck(finding, host));
+    }
+
+    public static ProbeResult RedirectToOtherHost(string host)
+    {
+        return Redirect(RedirectFinding.OtherHost, host);
+    }
+
     public static ProbeResult Assessed(string missingHeaders)
     {
         return Response(200, HeadersAssessed(missingHeaders), null);

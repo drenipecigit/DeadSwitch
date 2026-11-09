@@ -85,4 +85,14 @@ internal sealed class TestRepository : IMonitoredServiceRepository
         _control.RunBaselineSwitches();
         return _real.GetCertificateBaselineAsync(id, url, ct);
     }
+
+    public Task<bool> HasRedirectFindingAsync(Guid id, string url, CancellationToken ct = default)
+    {
+        return _real.HasRedirectFindingAsync(id, url, ct);
+    }
+
+    public Task<bool> HasSeenRedirectTargetAsync(Guid id, string url, RedirectFinding finding, string? host, DateTime sinceUtc, CancellationToken ct = default)
+    {
+        return _real.HasSeenRedirectTargetAsync(id, url, finding, host, sinceUtc, ct);
+    }
 }

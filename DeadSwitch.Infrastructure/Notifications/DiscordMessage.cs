@@ -15,6 +15,9 @@ internal sealed class DiscordMessage
     private const int MaxNameLength = 100;
     private const int MaxUrlLength = 300;
 
+    // The longest a host name can be.
+    private const int MaxHostLength = 253;
+
     [JsonPropertyName("content")]
     public string Content { get; }
 
@@ -61,9 +64,10 @@ internal sealed class DiscordMessage
         return new DiscordMessage(content);
     }
 
-    // Security: only the name comes from outside this class's fixed texts, and it goes through the same
-    // cleaning as above. No URL, date or number of days left is written, so nothing the monitored site
-    // has written or chosen can reach the channel.
+    // Security: only the name and a redirect's host come from outside this class's fixed texts, and both
+    // go through the same cleaning as above. The host has already passed the allowlist in
+    // RedirectTargetParser, so this is the second layer. It is written without a scheme and as inline
+    // code, so Discord makes no link and fetches no preview. The empty allowed_mentions stops every ping.
     public static DiscordMessage Create(SecurityWarning warning)
     {
         string name = FormatAsCode(warning.ServiceName, MaxNameLength);
@@ -76,6 +80,18 @@ internal sealed class DiscordMessage
         else if (warning.Kind == SecurityWarningKind.CertificateRejected)
         {
             text = "the TLS certificate of " + name + " was rejected.";
+        }
+        else if (warning.Kind == SecurityWarningKind.RedirectToOtherHost)
+        {
+            text = name + " now redirects to another domain: " + FormatAsCode(warning.RedirectTargetHost ?? "", MaxHostLength) + ".";
+        }
+        else if (warning.Kind == SecurityWarningKind.RedirectToInternalTarget)
+        {
+            text = name + " now redirects to a private or internal address.";
+        }
+        else if (warning.Kind == SecurityWarningKind.RedirectUnreadable)
+        {
+            text = name + " now sends a redirect whose target cannot be read.";
         }
         else
         {

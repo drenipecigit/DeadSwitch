@@ -41,7 +41,7 @@ public class ServiceOverviewTests
             names.Add(property.Name);
         }
 
-        string[] expected = { "id", "name", "url", "currentStatus", "lastKnownStatus", "lastCheckedAt", "isEnabled", "responseTimeMs", "failureReason", "securityGrade", "missingSecurityHeaders", "securityNotAssessedReason", "certificateNotAfterUtc", "certificateDaysLeft", "certificateExpiryText", "certificateNotAssessedReason" };
+        string[] expected = { "id", "name", "url", "currentStatus", "lastKnownStatus", "lastCheckedAt", "isEnabled", "responseTimeMs", "failureReason", "securityGrade", "missingSecurityHeaders", "securityNotAssessedReason", "certificateNotAfterUtc", "certificateDaysLeft", "certificateExpiryText", "certificateNotAssessedReason", "redirectFinding", "redirectTargetHost" };
         Assert.Equal(expected, names);
     }
 

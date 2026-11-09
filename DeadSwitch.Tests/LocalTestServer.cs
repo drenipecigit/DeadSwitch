@@ -122,6 +122,7 @@ internal sealed class LocalTestServer : IAsyncDisposable
         _app.MapGet("/held-second", WaitForBothHeldRequestsAsync);
         _app.MapGet("/secret", () => Results.Ok());
         _app.MapGet("/redirect", () => Results.Redirect("/secret"));
+        _app.MapGet("/redirect-to-other-name", SendRedirectToOtherName);
         _app.MapGet("/set-cookie", (HttpContext context) =>
         {
             context.Response.Headers.SetCookie = "session=abc";
@@ -144,6 +145,12 @@ internal sealed class LocalTestServer : IAsyncDisposable
 
         await _bothHeldRequestsArrived.Task.WaitAsync(TimeSpan.FromSeconds(10));
         return Results.Ok();
+    }
+
+    // Uses this server's own port, so that a client that wrongly followed it would be seen here.
+    private static IResult SendRedirectToOtherName(HttpContext context)
+    {
+        return Results.Redirect($"http://other-name.test:{context.Connection.LocalPort}/secret");
     }
 
     private static IResult SendSecurityHeaders(HttpContext context)

@@ -90,7 +90,8 @@ public static class UrlSafety
         return uri;
     }
 
-    private static bool HasPublicHost(Uri uri)
+    // Internal so that RedirectTargetParser judges a name by the same rules. It never looks up a name.
+    internal static bool HasPublicHost(Uri uri)
     {
         string? connectionHost = GetConnectionHost(uri);
         if (connectionHost == null)
@@ -129,7 +130,7 @@ public static class UrlSafety
     // In DnsSafeHost a fullwidth "localhost" is only an unfamiliar name, which would pass this check.
     // A host that cannot be converted would throw later inside HttpClient, so it is rejected here.
     // Returns null when the host cannot be converted.
-    private static string? GetConnectionHost(Uri uri)
+    internal static string? GetConnectionHost(Uri uri)
     {
         try
         {

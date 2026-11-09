@@ -41,6 +41,13 @@ namespace DeadSwitch.Infrastructure.Migrations
                     b.Property<Guid>("MonitoredServiceId")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("RedirectFinding")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RedirectTargetHost")
+                        .HasMaxLength(253)
+                        .HasColumnType("TEXT");
+
                     b.Property<long>("ResponseTimeMs")
                         .HasColumnType("INTEGER");
 

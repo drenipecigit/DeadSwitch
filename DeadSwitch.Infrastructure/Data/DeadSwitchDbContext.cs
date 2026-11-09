@@ -68,6 +68,19 @@ public class DeadSwitchDbContext : DbContext
                 time => time,
                 stored => DateTime.SpecifyKind(stored, DateTimeKind.Utc)));
 
+        // As text, so that the column can be read without the code. EF Core never passes null to a
+        // conversion, so null stays NULL and the ! is safe.
+        modelBuilder.Entity<CheckRecord>()
+            .Property(record => record.RedirectFinding)
+            .HasConversion(
+                finding => finding.ToString()!,
+                text => Enum.Parse<RedirectFinding>(text, ignoreCase: true));
+
+        // Only documentation: SQLite does not enforce a length. RedirectTargetParser is what limits the value.
+        modelBuilder.Entity<CheckRecord>()
+            .Property(record => record.RedirectTargetHost)
+            .HasMaxLength(253);
+
         // Cascade: deleting a service also deletes its check records in the database.
         modelBuilder.Entity<CheckRecord>()
             .HasOne<MonitoredService>()

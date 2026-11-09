@@ -74,6 +74,8 @@ function createRow(service) {
   row.appendChild(createTextCell(formatHeaderDetails(service), "wrap-text"));
   row.appendChild(createTextCell(formatCertificate(service), "no-wrap"));
   row.appendChild(createTextCell(formatCertificateDetails(service), "wrap-text"));
+  // Plain text in a cell and never a link: the host was chosen by the monitored site.
+  row.appendChild(createTextCell(formatRedirectTarget(service), "wrap-text"));
 
   return row;
 }
@@ -205,6 +207,30 @@ function formatCertificateDetails(service) {
   }
 
   return "Not valid after " + new Date(service.certificateNotAfterUtc).toLocaleDateString();
+}
+
+function formatRedirectTarget(service) {
+  if (service.redirectFinding === "OTHER_HOST") {
+    return service.redirectTargetHost;
+  }
+
+  if (service.redirectFinding === "SAME_HOST") {
+    return "Same host";
+  }
+
+  if (service.redirectFinding === "INTERNAL_TARGET") {
+    return "Internal address (hidden)";
+  }
+
+  if (service.redirectFinding === "UNREADABLE") {
+    return "Unreadable target";
+  }
+
+  if (service.redirectFinding === "NO_REDIRECT") {
+    return "None";
+  }
+
+  return "-";
 }
 
 function showUpdateSucceeded() {

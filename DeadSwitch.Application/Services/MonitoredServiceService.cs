@@ -72,6 +72,8 @@ public class MonitoredServiceService
             int? certificateDaysLeft = null;
             string? certificateExpiryText = null;
             string? certificateNotAssessedReason = null;
+            RedirectFinding? redirectFinding = null;
+            string? redirectTargetHost = null;
 
             // A new URL empties LastCheckedAt but keeps the history. Without this check the row would
             // show the response time of the old address, also after changing back to an earlier URL.
@@ -91,6 +93,8 @@ public class MonitoredServiceService
                     // check, so a certificate can expire while no checks are running.
                     certificateNotAfterUtc = latest[0].CertificateNotAfterUtc;
                     certificateNotAssessedReason = latest[0].CertificateNotAssessedReason;
+                    redirectFinding = latest[0].RedirectFinding;
+                    redirectTargetHost = latest[0].RedirectTargetHost;
 
                     if (certificateNotAfterUtc.HasValue)
                     {
@@ -119,7 +123,9 @@ public class MonitoredServiceService
                 CertificateNotAfterUtc: certificateNotAfterUtc,
                 CertificateDaysLeft: certificateDaysLeft,
                 CertificateExpiryText: certificateExpiryText,
-                CertificateNotAssessedReason: certificateNotAssessedReason));
+                CertificateNotAssessedReason: certificateNotAssessedReason,
+                RedirectFinding: redirectFinding,
+                RedirectTargetHost: redirectTargetHost));
         }
 
         return overview;
@@ -258,6 +264,13 @@ public class MonitoredServiceService
             {
                 record.CertificateNotAfterUtc = result.Certificate.NotAfterUtc;
                 record.CertificateNotAssessedReason = result.Certificate.NotAssessedReason;
+            }
+
+            // Null when the response said nothing about a redirect, and then the two fields stay empty.
+            if (result.RedirectTarget != null)
+            {
+                record.RedirectFinding = result.RedirectTarget.Finding;
+                record.RedirectTargetHost = result.RedirectTarget.Host;
             }
 
             // Must be found before LastCheckedAt is overwritten and the check is saved below. Not inside a

@@ -35,7 +35,61 @@ public sealed class SecurityWarningFinder
             warnings.Add(certificateWarning);
         }
 
+        SecurityWarning? redirectWarning = await FindRedirectWarningAsync(service, record, ct);
+        if (redirectWarning != null)
+        {
+            warnings.Add(redirectWarning);
+        }
+
         return warnings;
+    }
+
+    private async Task<SecurityWarning?> FindRedirectWarningAsync(MonitoredService service, CheckRecord record, CancellationToken ct)
+    {
+        if (!RedirectWarningRule.IsExternal(record.RedirectFinding))
+        {
+            return null;
+        }
+
+        // A new service or a new URL has nothing earlier to be compared with.
+        if (!service.LastCheckedAt.HasValue)
+        {
+            return null;
+        }
+
+        // Only timeouts and errors so far, or rows older than this feature: still nothing to compare with.
+        bool hasEarlierFinding = await _repository.HasRedirectFindingAsync(service.Id, service.Url, ct);
+        if (!hasEarlierFinding)
+        {
+            return null;
+        }
+
+        // The ! is safe: IsExternal has just said that there is a finding.
+        RedirectFinding finding = record.RedirectFinding!.Value;
+        DateTime rememberedSince = record.CheckedAtUtc.AddDays(-RedirectWarningRule.RememberDays);
+
+        bool alreadySeen = await _repository.HasSeenRedirectTargetAsync(service.Id, service.Url, finding, record.RedirectTargetHost, rememberedSince, ct);
+        if (alreadySeen)
+        {
+            return null;
+        }
+
+        return new SecurityWarning(service.Id, service.Name, ToWarningKind(finding), Array.Empty<string>(), null, record.RedirectTargetHost);
+    }
+
+    private static SecurityWarningKind ToWarningKind(RedirectFinding finding)
+    {
+        if (finding == RedirectFinding.OtherHost)
+        {
+            return SecurityWarningKind.RedirectToOtherHost;
+        }
+
+        if (finding == RedirectFinding.InternalTarget)
+        {
+            return SecurityWarningKind.RedirectToInternalTarget;
+        }
+
+        return SecurityWarningKind.RedirectUnreadable;
     }
 
     private async Task<SecurityWarning?> FindHeaderWarningAsync(MonitoredService service, CheckRecord record, CancellationToken ct)

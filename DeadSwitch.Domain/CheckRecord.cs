@@ -33,4 +33,10 @@ public class CheckRecord
 
     // A fixed text saying why this check has no certificate date.
     public string? CertificateNotAssessedReason { get; set; }
+
+    // Null when this check learned nothing about a redirect, and on every row older than this column.
+    public RedirectFinding? RedirectFinding { get; set; }
+
+    // A normalized host name or address, and only for OtherHost. The rest of the redirect is never kept.
+    public string? RedirectTargetHost { get; set; }
 }

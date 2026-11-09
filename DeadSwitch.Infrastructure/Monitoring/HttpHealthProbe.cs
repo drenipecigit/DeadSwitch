@@ -65,13 +65,16 @@ public sealed class HttpHealthProbe : IHealthProbe
             CertificateCheck certificate = ReadCertificateOfResponse(uri);
             hostWithEntry = null;
 
+            // Read from the response that is already here. The target itself is never contacted.
+            RedirectTargetCheck? redirectTarget = RedirectTargetReader.Read(uri, statusCode, response.Headers);
+
             // A redirect proves that the server answered, so it counts as UP. The target is never
             // followed or checked, which means a redirect to a broken page also counts as UP.
             bool isRedirect = statusCode >= 300 && statusCode <= 399;
 
             if (response.IsSuccessStatusCode || isRedirect)
             {
-                return new ProbeResult(ServiceStatus.Up, statusCode, stopwatch.ElapsedMilliseconds, null, securityHeaders, certificate);
+                return new ProbeResult(ServiceStatus.Up, statusCode, stopwatch.ElapsedMilliseconds, null, securityHeaders, certificate, redirectTarget);
             }
 
             return new ProbeResult(ServiceStatus.Down, statusCode, stopwatch.ElapsedMilliseconds, $"HTTP {statusCode}", securityHeaders, certificate);

@@ -211,6 +211,8 @@ public class DashboardJavaScriptTests
     [InlineData("service.certificateNotAfterUtc")]
     [InlineData("service.certificateExpiryText")]
     [InlineData("service.certificateNotAssessedReason")]
+    [InlineData("service.redirectFinding")]
+    [InlineData("service.redirectTargetHost")]
     public async Task TheScriptReadsEveryFieldOfTheOverview(string field)
     {
         string script = await ReadFileAsync("/dashboard.js");
@@ -249,6 +251,7 @@ public class DashboardJavaScriptTests
     [InlineData("createTextCell(formatHeaderDetails(service), ")]
     [InlineData("createTextCell(formatCertificate(service), ")]
     [InlineData("createTextCell(formatCertificateDetails(service), ")]
+    [InlineData("createTextCell(formatRedirectTarget(service), ")]
     public async Task TheSecurityCellsAreWrittenAsText(string cellCode)
     {
         string script = await ReadFileAsync("/dashboard.js");
@@ -259,6 +262,9 @@ public class DashboardJavaScriptTests
     [Theory]
     [InlineData("\"Not assessed\"")]
     [InlineData("\"None\"")]
+    [InlineData("\"Same host\"")]
+    [InlineData("\"Internal address (hidden)\"")]
+    [InlineData("\"Unreadable target\"")]
     public async Task TheFixedCellTextsAreInTheScript(string text)
     {
         string script = await ReadFileAsync("/dashboard.js");
@@ -273,6 +279,7 @@ public class DashboardJavaScriptTests
     [InlineData("return service.securityNotAssessedReason;")]
     [InlineData("return service.certificateExpiryText;")]
     [InlineData("return service.certificateNotAssessedReason;")]
+    [InlineData("return service.redirectTargetHost;")]
     public async Task TheSecurityCellsReturnTheValuesFromTheOverview(string returnCode)
     {
         string script = await ReadFileAsync("/dashboard.js");
@@ -295,6 +302,7 @@ public class DashboardJavaScriptTests
     [InlineData("Header details")]
     [InlineData("Certificate")]
     [InlineData("Certificate details")]
+    [InlineData("Redirect")]
     public async Task ThePageHasTheSecurityColumns(string heading)
     {
         string page = await ReadFileAsync("/");
@@ -312,7 +320,7 @@ public class DashboardJavaScriptTests
         int headings = Regex.Matches(page, "<th scope=\"col\">").Count;
         int cells = Regex.Matches(script, @"row\.appendChild\(").Count;
 
-        Assert.Equal(11, headings);
+        Assert.Equal(12, headings);
         Assert.Equal(headings, cells);
     }
 

@@ -161,6 +161,34 @@ public class MigrationTests
         Assert.Null(record.CertificateNotAssessedReason);
     }
 
+    [Fact]
+    public async Task RedirectMigrationKeepsOldRecordsWithoutAFinding()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await using AsyncServiceScope scope = app.Services.CreateAsyncScope();
+        DeadSwitchDbContext db = scope.ServiceProvider.GetRequiredService<DeadSwitchDbContext>();
+        IMigrator migrator = db.GetService<IMigrator>();
+
+        await migrator.MigrateAsync("20261109095631_AddCertificateToCheckRecords");
+        Guid serviceId = Guid.NewGuid();
+        Guid recordId = Guid.NewGuid();
+        string url = "https://example.com";
+        string up = "UP";
+        string checkedAt = "2026-01-01 12:00:00";
+        string grade = "B";
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO MonitoredServices (Id, Name, Url, CurrentStatus) VALUES ({serviceId}, {"Old"}, {url}, {up})");
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO CheckRecords (Id, MonitoredServiceId, Url, CheckedAtUtc, Status, ResponseTimeMs, SecurityGrade) VALUES ({recordId}, {serviceId}, {url}, {checkedAt}, {up}, {12}, {grade})");
+
+        await db.Database.MigrateAsync();
+
+        CheckRecord record = await db.CheckRecords.SingleAsync();
+        Assert.Equal(recordId, record.Id);
+        Assert.Equal("B", record.SecurityGrade);
+        Assert.Null(record.RedirectFinding);
+        Assert.Null(record.RedirectTargetHost);
+    }
+
     // Fails if the model was changed without a matching migration.
     [Fact]
     public async Task ModelMatchesTheMigrations()

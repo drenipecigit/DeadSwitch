@@ -17,4 +17,10 @@ public interface IMonitoredServiceRepository
 
     // The newest check of this URL with a certificate verdict, or null if there is none.
     Task<CheckRecord?> GetCertificateBaselineAsync(Guid id, string url, CancellationToken cancellationToken = default);
+
+    // Whether any earlier check of this URL learned something about a redirect.
+    Task<bool> HasRedirectFindingAsync(Guid id, string url, CancellationToken cancellationToken = default);
+
+    // Whether this URL has had the same finding and host at or after the given time.
+    Task<bool> HasSeenRedirectTargetAsync(Guid id, string url, RedirectFinding finding, string? host, DateTime sinceUtc, CancellationToken cancellationToken = default);
 }

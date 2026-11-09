@@ -107,6 +107,28 @@ public class MonitoredServiceRepository : IMonitoredServiceRepository
         return OnlyIfSameUrl(newest, url);
     }
 
+    public Task<bool> HasRedirectFindingAsync(Guid id, string url, CancellationToken ct = default)
+    {
+        return _db.CheckRecords
+            .AsNoTracking()
+            .Where(record => record.MonitoredServiceId == id)
+            .Where(record => record.Url == url)
+            .Where(record => record.RedirectFinding != null)
+            .AnyAsync(ct);
+    }
+
+    public Task<bool> HasSeenRedirectTargetAsync(Guid id, string url, RedirectFinding finding, string? host, DateTime sinceUtc, CancellationToken ct = default)
+    {
+        return _db.CheckRecords
+            .AsNoTracking()
+            .Where(record => record.MonitoredServiceId == id)
+            .Where(record => record.Url == url)
+            .Where(record => record.CheckedAtUtc >= sinceUtc)
+            .Where(record => record.RedirectFinding == finding)
+            .Where(record => record.RedirectTargetHost == host)
+            .AnyAsync(ct);
+    }
+
     private static CheckRecord? OnlyIfSameUrl(CheckRecord? record, string url)
     {
         if (record == null || record.Url != url)
