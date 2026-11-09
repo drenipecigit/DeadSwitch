@@ -804,12 +804,37 @@ Done by the owner on 2026-11-09 in Chrome against the real server (Kestrel) for 
 
 This is one run in one browser, against sites whose headers can change.
 
+Done by the owner on 2026-11-09 in Windows PowerShell 5.1 and Chrome, for the TLS certificate. The run was approved.
+
+| Address | Status | Security grade | Certificate |
+|---|---|---|---|
+| `https://github.com/` | UP | A | `notAfter` 2027-01-27T23:59:59Z, `79 days left` |
+| `https://1.1.1.1/` | UP, 301 | | A date and `42 days left` |
+| `http://github.com/` | UP, 301 | | `Not an HTTPS address.` |
+| `https://expired.badssl.com/` | DOWN | None | No date, `The certificate was not valid.` |
+| `https://wrong.host.badssl.com/` | DOWN | None | No date, `The certificate was not valid.` |
+| `https://self-signed.badssl.com/` | DOWN | None | No date, `The certificate was not valid.` |
+
+- Repeated checks against `github.com`, each with a new connection, took about 76 to 111 ms. The probe has no way to run with a pooled connection, so this is the whole response time and not the extra cost of the new connection.
+- After changing a service from `github.com` to `expired.badssl.com`, the overview showed no old date.
+- `https://127.0.0.1/` gave HTTP 400.
+- The text `Not assessed` in the certificate cell was seen in the browser. This is the text that the mutation check could not prove. The Console was clean.
+
+Timeouts in the same run. **The cause has not been established.**
+
+- 4 of 14 checks against `expired.badssl.com` timed out after 10 seconds.
+- `curl` without DeadSwitch also got 2 timeouts of 10 against the same address.
+- 1 of 34 checks against `github.com` timed out, directly after a timeout against `badssl`. It could not be reproduced.
+
+This is one run in one browser, against sites whose certificates can change.
+
 ### Not run manually
 
-TLS certificate, not run manually at all so far:
+TLS certificate, not confirmed in the owner's run:
 
-- A check against any real website, so real certificate chains, real expired certificates and the network cost of a new connection per check are only described, not measured.
-- The new columns in the page in a real browser, including `Expired`. A real run would need a date that has passed in the database.
+- `Expired` on the screen. A real run would need a date that has passed in the database.
+- Revocation of a certificate.
+- The worker with Discord turned on.
 
 Security headers:
 
@@ -927,7 +952,7 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | Webhook address outside git | Done | Proven by tests of the settings files and the log. A manual run confirms the secret is read, and that the log holds no address after a real send |
 | Dashboard (phase 5, not part of the MVP) | Done | The server side is proven by tests and a run against the real server, and the page by the owner's run in Chrome. Step D (`eval`) and the visible failure message are not confirmed on the screen |
 | Security headers with a grade, saved per check | Done | Proven by tests and by the owner's run against real websites in Chrome. Not tested: old rows in a real upgraded database, and whether a grade is fair for the values. The warning when a header disappears comes in task 3 |
-| Certificate expiry saved per check, days left on the dashboard | Partial | Proven by tests against a local server. Not yet run against a real website or seen in a browser. The warning when few days remain comes in task 3 |
+| Certificate expiry saved per check, days left on the dashboard | Done | Proven by tests against a local server and by the owner's run against real websites in Chrome. Not confirmed manually: `Expired` on the screen, revocation, and the worker with Discord turned on. The cause of the timeouts in that run has not been established. The warning when few days remain comes in task 3 |
 | README | Missing | |
 | GitHub Actions | Missing | Waits for the owner's approval |
 
@@ -1122,7 +1147,7 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes early so that every new feature is visible in it at once. The MVP still covers phases 1 to 4; the dashboard is built earlier but is not part of the MVP. Each task is one branch, with a plan approved first.
 
-**Next step:** the owner runs the manual test of `feat/tls-certificate`, reviews and merges it. After that comes `feat/security-warnings`, with a plan approved first; see "Phase 3: Security checks".
+**Next step:** the manual test of `feat/tls-certificate` is approved, and the owner reviews and merges it. After that comes `feat/security-warnings`, with a plan approved first; see "Phase 3: Security checks".
 
 ### Phase 1: Stable foundation
 
@@ -1171,9 +1196,9 @@ The phase is built as four tasks, one branch each, in this order:
 
 Headers come first because they are already in the response the probe receives, so nothing about how connections are opened has to change. The certificate is the only task that changes the connection step. The warnings compare data that the first two tasks save.
 
-Requirements for the later tasks:
+Requirements for the tasks:
 
-- **Task 2:** Certificate validation must never be turned off. An invalid certificate must give no grade. A certificate that is missing on a reused connection must not be read as invalid. A test that needs HTTPS must trust only its own test certificate, set from the test, and production code must have no setting for it.
+- **Task 2, built on `feat/tls-certificate`:** Certificate validation must never be turned off. An invalid certificate must give no grade. A certificate that is missing on a reused connection must not be read as invalid. A test that needs HTTPS must trust only its own test certificate, set from the test, and production code must have no setting for it.
 - **Task 4:** `Location` must never be sent unprocessed to Discord or to the logs, and is shown as text only, never as a clickable link.
 
 ### Phase 4: DevOps
