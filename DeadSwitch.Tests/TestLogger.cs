@@ -9,7 +9,7 @@ internal sealed class TestLogger : ILogger<MonitoringWorker>
     private readonly object _sync = new object();
     private readonly List<string> _errors = new List<string>();
 
-    // Släpps när ett pass är klart, så att testet vet när det är säkert att flytta klockan.
+    // Released when a pass is finished, so the test knows when it is safe to move the clock.
     private readonly SemaphoreSlim _passFinished = new SemaphoreSlim(0);
 
     public List<string> GetErrors()

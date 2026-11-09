@@ -7,7 +7,7 @@ internal sealed class TestRepositoryControl
     private bool _holdNextGetById;
     private int _highestLockCountDuringRead;
 
-    // Håller kvar workern mitt i ett pass, så att testet kan göra ett anrop exakt då.
+    // Holds the worker in the middle of a pass, so the test can make a call at exactly that moment.
     private readonly SemaphoreSlim _holdReached = new SemaphoreSlim(0);
     private readonly SemaphoreSlim _holdReleased = new SemaphoreSlim(0);
 

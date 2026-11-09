@@ -27,8 +27,8 @@ public sealed class HttpHealthProbe : IHealthProbe
             Uri uri = UrlSafety.Validate(url);
             using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, uri);
 
-            // ResponseHeadersRead: stop waiting at the headers. The status code is all a health
-            // check needs, and a large body must not affect the measured time.
+            // ResponseHeadersRead: stop waiting at the headers. The status code and the security headers are
+            // all a check needs, and a large body must not affect the measured time.
             using HttpResponseMessage response = await _client.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,

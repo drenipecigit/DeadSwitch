@@ -32,7 +32,7 @@ internal sealed class TestApp : WebApplicationFactory<Program>
 
     public TestProbe Probe { get; } = new TestProbe();
 
-    // Styr både klockan och timern, så att ett test kan flytta tiden utan att vänta på riktigt.
+    // Controls both the clock and the timer, so a test can move the time without really waiting.
     public FakeTimeProvider Clock { get; } = new FakeTimeProvider(new DateTimeOffset(2026, 11, 3, 12, 0, 0, TimeSpan.Zero));
 
     public TestRepositoryControl RepositoryControl { get; } = new TestRepositoryControl();

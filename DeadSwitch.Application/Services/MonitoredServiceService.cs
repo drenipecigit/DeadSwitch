@@ -6,7 +6,8 @@ namespace DeadSwitch.Application.Services;
 
 public class MonitoredServiceService
 {
-    // Passen kommer aldrig på exakt samma millisekund. Utan toleransen missas ett pass ibland.
+    // A pass never arrives on the exact millisecond. Without this tolerance a service would sometimes
+    // miss a pass, so a check may start up to 250 ms early.
     private static readonly TimeSpan DueTolerance = TimeSpan.FromMilliseconds(250);
 
     private readonly IMonitoredServiceRepository _repository;

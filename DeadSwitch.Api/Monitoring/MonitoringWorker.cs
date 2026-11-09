@@ -45,6 +45,7 @@ public sealed class MonitoringWorker : BackgroundService
 
         try
         {
+            // "do" and not "while": the first pass must run at once, and not wait one poll for the first tick.
             do
             {
                 await RunPassAndLogFailureAsync(stoppingToken);
@@ -124,6 +125,7 @@ public sealed class MonitoringWorker : BackgroundService
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
+            // A shutdown must stop the pass, so it is passed on. The catch below logs any other cancellation.
             throw;
         }
         catch (Exception ex)
