@@ -23,11 +23,15 @@ Content-Type: application/json
 GET {{DeadSwitch.Api_HostAddress}}/services
 Accept: application/json
 
+### One row per service for the dashboard, with the result of its latest check
+GET {{DeadSwitch.Api_HostAddress}}/services/overview
+Accept: application/json
+
 ### Get one service
 GET {{DeadSwitch.Api_HostAddress}}/services/{{serviceId}}
 Accept: application/json
 
-### Update a service (send every field: missing fields fall back to their defaults)
+### Update a service (every field is required: a missing field gives 400)
 PUT {{DeadSwitch.Api_HostAddress}}/services/{{serviceId}}
 Content-Type: application/json
 
