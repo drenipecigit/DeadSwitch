@@ -4,9 +4,13 @@ namespace DeadSwitch.Tests;
 
 // JavaScript does not run in these tests. They read the files as text, so they catch mistakes such as
 // innerHTML, but they do not prove that the page works and a determined author can get around them.
-// Only the owner's run in a browser shows how the page really behaves.
+// The decisions in dashboard-logic.js are run in DashboardLogicTests. Only the owner's run in a browser
+// shows how the page really behaves.
 public class DashboardJavaScriptTests
 {
+    private const string PageScript = "/dashboard.js";
+    private const string LogicScript = "/dashboard-logic.js";
+
     // Each of these turns text into code or HTML. A name from a user must never reach one of them.
     private static readonly string[] ForbiddenInScript =
     {
@@ -62,6 +66,25 @@ public class DashboardJavaScriptTests
         "url(",
     };
 
+    // The only properties the page script may set. Each of them keeps a value as plain text or only
+    // shows or hides something. Any other property, such as src, style or onclick, is refused.
+    private static readonly string[] SafeProperties =
+    {
+        "textContent",
+        "title",
+        "className",
+        "hidden",
+    };
+
+    // The logic file must not be able to change the page, so that the tests in Jint cover all of it.
+    private static readonly string[] PageCode =
+    {
+        "document",
+        "window",
+        "fetch",
+        "setTimeout",
+    };
+
     // A test that can never fail proves nothing, so the search itself is tested on bad code first.
     [Theory]
     [InlineData("cell.innerHTML = service.name;")]
@@ -93,20 +116,14 @@ public class DashboardJavaScriptTests
         Assert.False(HasCodeThatRunsText(safeCode));
     }
 
-    [Fact]
-    public async Task TheScriptHasNoCodeThatRunsText()
+    [Theory]
+    [InlineData(PageScript)]
+    [InlineData(LogicScript)]
+    public async Task NoScriptHasCodeThatRunsText(string path)
     {
-        string script = await ReadFileAsync("/dashboard.js");
+        string script = await ReadFileAsync(path);
 
         Assert.False(HasCodeThatRunsText(script));
-    }
-
-    [Fact]
-    public async Task TheScriptWritesTextOnlyThroughTextContent()
-    {
-        string script = await ReadFileAsync("/dashboard.js");
-
-        Assert.Contains(".textContent = ", script);
     }
 
     [Theory]
@@ -120,10 +137,12 @@ public class DashboardJavaScriptTests
         Assert.True(ContainsAny(badCode, LinkCode));
     }
 
-    [Fact]
-    public async Task TheScriptCreatesNoLinks()
+    [Theory]
+    [InlineData(PageScript)]
+    [InlineData(LogicScript)]
+    public async Task NoScriptCreatesLinks(string path)
     {
-        string script = await ReadFileAsync("/dashboard.js");
+        string script = await ReadFileAsync(path);
 
         Assert.False(ContainsAny(script, LinkCode));
     }
@@ -141,11 +160,70 @@ public class DashboardJavaScriptTests
     [Fact]
     public async Task TheScriptOnlyReads()
     {
-        string script = await ReadFileAsync("/dashboard.js");
+        string script = await ReadFileAsync(PageScript);
 
         Assert.False(ContainsAny(script, WriteCode));
         Assert.Single(Regex.Matches(script, @"\bfetch\("));
         Assert.Contains("fetch(\"/services/overview\"", script);
+    }
+
+    [Theory]
+    [InlineData("cell.innerHTML = service.name;", "innerHTML")]
+    [InlineData("image.src = service.url;", "src")]
+    [InlineData("cell.onclick = service.name;", "onclick")]
+    [InlineData("cell.style = service.name;", "style")]
+    [InlineData("cell.innerText += service.name;", "innerText")]
+    [InlineData("cell.textContent = service.name;", "textContent")]
+    public void TheSearchFindsEveryPropertyThatIsSet(string code, string property)
+    {
+        Assert.Equal(new List<string> { property }, FindSetProperties(code));
+    }
+
+    [Theory]
+    [InlineData("if (service.name === other.name) {")]
+    [InlineData("if (service.securityGrade !== null) {")]
+    [InlineData("if (list.length >= 0) {")]
+    [InlineData("const name = service.name;")]
+    public void TheSearchLeavesComparisonsAndVariablesAlone(string code)
+    {
+        Assert.Empty(FindSetProperties(code));
+    }
+
+    // Together with the forbidden words above, this means that a value can reach the page only as text.
+    [Fact]
+    public async Task ThePageScriptOnlySetsSafeProperties()
+    {
+        string script = await ReadFileAsync(PageScript);
+
+        foreach (string property in FindSetProperties(script))
+        {
+            Assert.Contains(property, SafeProperties);
+        }
+    }
+
+    [Fact]
+    public async Task TheLogicFileDoesNotTouchThePage()
+    {
+        string script = await ReadFileAsync(LogicScript);
+
+        Assert.False(ContainsAny(script, PageCode));
+        Assert.Empty(FindSetProperties(script));
+    }
+
+    // The two helpers are the only way text reaches the page, and both write it through textContent.
+    [Theory]
+    [InlineData("element.textContent = text;")]
+    [InlineData("createText(\"span\", \"card-name\", service.name)")]
+    [InlineData("createText(\"span\", \"card-url\", service.url)")]
+    [InlineData("appendDetail(row, service.failureReason)")]
+    [InlineData("appendDetail(row, certificate.text)")]
+    [InlineData("details.title = certificate.title;")]
+    [InlineData("getElementById(\"summary\").textContent = formatSummary(services);")]
+    public async Task TheValuesFromTheServerAreWrittenAsText(string code)
+    {
+        string script = await ReadFileAsync(PageScript);
+
+        Assert.Contains(code, script);
     }
 
     [Fact]
@@ -170,7 +248,8 @@ public class DashboardJavaScriptTests
 
     [Theory]
     [InlineData("/")]
-    [InlineData("/dashboard.js")]
+    [InlineData(PageScript)]
+    [InlineData(LogicScript)]
     [InlineData("/dashboard.css")]
     public async Task NoFileLoadsAnythingFromOutside(string path)
     {
@@ -183,7 +262,8 @@ public class DashboardJavaScriptTests
     // and an invisible character cannot hide in the code.
     [Theory]
     [InlineData("/")]
-    [InlineData("/dashboard.js")]
+    [InlineData(PageScript)]
+    [InlineData(LogicScript)]
     [InlineData("/dashboard.css")]
     public async Task EveryFileIsPlainAscii(string path)
     {
@@ -195,7 +275,7 @@ public class DashboardJavaScriptTests
         }
     }
 
-    // A renamed field in the API would otherwise only be noticed as an empty column in the browser.
+    // A renamed field in the API would otherwise only be noticed as an empty field in the browser.
     [Theory]
     [InlineData("service.name")]
     [InlineData("service.url")]
@@ -213,23 +293,25 @@ public class DashboardJavaScriptTests
     [InlineData("service.certificateNotAssessedReason")]
     [InlineData("service.redirectFinding")]
     [InlineData("service.redirectTargetHost")]
-    public async Task TheScriptReadsEveryFieldOfTheOverview(string field)
+    public async Task TheScriptsReadEveryFieldOfTheOverview(string field)
     {
-        string script = await ReadFileAsync("/dashboard.js");
+        string pageScript = await ReadFileAsync(PageScript);
+        string logicScript = await ReadFileAsync(LogicScript);
 
-        Assert.Contains(field, script);
+        Assert.Contains(field, pageScript + logicScript);
     }
 
     [Theory]
     [InlineData("update-time")]
     [InlineData("update-error")]
     [InlineData("no-services")]
-    [InlineData("table-frame")]
-    [InlineData("service-rows")]
+    [InlineData("summary")]
+    [InlineData("service-area")]
+    [InlineData("service-cards")]
     [InlineData("grade-explanation")]
     public async Task ThePageHasEveryElementTheScriptLooksFor(string id)
     {
-        string script = await ReadFileAsync("/dashboard.js");
+        string script = await ReadFileAsync(PageScript);
         string page = await ReadFileAsync("/");
 
         Assert.Contains($"getElementById(\"{id}\")", script);
@@ -239,89 +321,45 @@ public class DashboardJavaScriptTests
     [Fact]
     public async Task TheMeaningOfTheGradeIsWrittenThroughTextContent()
     {
-        string script = await ReadFileAsync("/dashboard.js");
+        string script = await ReadFileAsync(PageScript);
 
         Assert.Contains("\"Grade A means that all five security headers are present. Their values are not assessed.\"", script);
         Assert.Contains("getElementById(\"grade-explanation\").textContent = GRADE_EXPLANATION;", script);
     }
 
-    // createTextCell is the only way a value reaches these cells, and it writes through textContent.
+    // Every time on the page must come from formatLocalTime, which the logic tests prove. The browser's own
+    // formatting follows the browser's language and would give another format on another machine.
     [Theory]
-    [InlineData("createTextCell(formatSecurityGrade(service), ")]
-    [InlineData("createTextCell(formatHeaderDetails(service), ")]
-    [InlineData("createTextCell(formatCertificate(service), ")]
-    [InlineData("createTextCell(formatCertificateDetails(service), ")]
-    [InlineData("createTextCell(formatRedirectTarget(service), ")]
-    public async Task TheSecurityCellsAreWrittenAsText(string cellCode)
+    [InlineData(PageScript)]
+    [InlineData(LogicScript)]
+    public async Task NoScriptUsesTheBrowsersOwnTimeFormat(string path)
     {
-        string script = await ReadFileAsync("/dashboard.js");
+        string script = await ReadFileAsync(path);
 
-        Assert.Contains(cellCode, script);
+        Assert.DoesNotContain("toLocale", script);
+        Assert.DoesNotContain("Intl", script);
     }
 
-    [Theory]
-    [InlineData("\"Not assessed\"")]
-    [InlineData("\"None\"")]
-    [InlineData("\"Same host\"")]
-    [InlineData("\"Internal address (hidden)\"")]
-    [InlineData("\"Unreadable target\"")]
-    public async Task TheFixedCellTextsAreInTheScript(string text)
+    // The order is proven in the logic tests. This shows that the cards are built from the sorted list.
+    [Fact]
+    public async Task TheCardsAreBuiltFromTheSortedList()
     {
-        string script = await ReadFileAsync("/dashboard.js");
+        string script = await ReadFileAsync(PageScript);
 
-        Assert.Contains(text, script);
-    }
-
-    // Finds that the value is returned, and not that the right branch is chosen. Only a browser shows that.
-    [Theory]
-    [InlineData("return service.securityGrade;")]
-    [InlineData("return service.missingSecurityHeaders;")]
-    [InlineData("return service.securityNotAssessedReason;")]
-    [InlineData("return service.certificateExpiryText;")]
-    [InlineData("return service.certificateNotAssessedReason;")]
-    [InlineData("return service.redirectTargetHost;")]
-    public async Task TheSecurityCellsReturnTheValuesFromTheOverview(string returnCode)
-    {
-        string script = await ReadFileAsync("/dashboard.js");
-
-        Assert.Contains(returnCode, script);
+        Assert.Contains("const sorted = sortServices(services);", script);
+        Assert.Contains("list.appendChild(createCard(sorted[i]));", script);
     }
 
     // The limits around expiry are tested on the server. If the script used the number it would have
-    // to make its own decisions, which no test can run.
-    [Fact]
-    public async Task TheScriptDoesNotUseTheNumberOfDays()
+    // to make its own decisions about them.
+    [Theory]
+    [InlineData(PageScript)]
+    [InlineData(LogicScript)]
+    public async Task NoScriptUsesTheNumberOfDays(string path)
     {
-        string script = await ReadFileAsync("/dashboard.js");
+        string script = await ReadFileAsync(path);
 
         Assert.DoesNotContain("certificateDaysLeft", script);
-    }
-
-    [Theory]
-    [InlineData("Security grade")]
-    [InlineData("Header details")]
-    [InlineData("Certificate")]
-    [InlineData("Certificate details")]
-    [InlineData("Redirect")]
-    public async Task ThePageHasTheSecurityColumns(string heading)
-    {
-        string page = await ReadFileAsync("/");
-
-        Assert.Contains($"<th scope=\"col\">{heading}</th>", page);
-    }
-
-    // A row with another number of cells than the head would put every value in the wrong column.
-    [Fact]
-    public async Task EveryColumnHasOneCellInTheRow()
-    {
-        string script = await ReadFileAsync("/dashboard.js");
-        string page = await ReadFileAsync("/");
-
-        int headings = Regex.Matches(page, "<th scope=\"col\">").Count;
-        int cells = Regex.Matches(script, @"row\.appendChild\(").Count;
-
-        Assert.Equal(12, headings);
-        Assert.Equal(headings, cells);
     }
 
     private static bool HasCodeThatRunsText(string code)
@@ -345,6 +383,19 @@ public class DashboardJavaScriptTests
         }
 
         return false;
+    }
+
+    // Finds "something.property =" and "something.property +=". The (?!=) leaves == and === alone.
+    private static List<string> FindSetProperties(string code)
+    {
+        List<string> properties = new List<string>();
+
+        foreach (Match match in Regex.Matches(code, @"\.(\w+)\s*\+?=(?!=)"))
+        {
+            properties.Add(match.Groups[1].Value);
+        }
+
+        return properties;
     }
 
     private static async Task<string> ReadFileAsync(string path)

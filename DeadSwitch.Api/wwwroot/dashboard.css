@@ -10,6 +10,8 @@
   --up-background: #dcf5e3;
   --down: #a40e26;
   --down-background: #ffe3e6;
+  --pending: #7a4a00;
+  --pending-background: #fff0c2;
   --unknown: #5b6470;
   --unknown-background: #e8ebef;
   --error-background: #fff4d6;
@@ -27,6 +29,8 @@
     --up-background: #143321;
     --down: #ffa3ae;
     --down-background: #451820;
+    --pending: #ffd36b;
+    --pending-background: #3b2f0e;
     --unknown: #c1c7cf;
     --unknown-background: #2d3238;
     --error-background: #40330f;
@@ -71,6 +75,12 @@ h1 {
   font-weight: 600;
 }
 
+.summary {
+  margin: 0 0 8px;
+  font-size: 17px;
+  font-weight: 700;
+}
+
 .no-services {
   margin: 0 0 16px;
   color: var(--muted);
@@ -79,58 +89,74 @@ h1 {
 .grade-explanation {
   margin: 0 0 16px;
   color: var(--muted);
+  font-size: 13px;
 }
 
-/* Only the table scrolls on a narrow screen, not the whole page. */
-.table-frame {
-  overflow-x: auto;
+.cards {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card {
+  padding: 12px 16px;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--surface);
 }
 
-table {
-  width: 100%;
-  border-collapse: collapse;
+/* Wraps on a narrow screen instead of making the page scroll sideways. */
+.card-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
 }
 
-th,
-td {
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--line);
-  text-align: left;
-  vertical-align: top;
-}
-
-tbody tr:last-child td {
-  border-bottom: none;
-}
-
-th {
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-/* A name or address can be long and without spaces, and must not stretch the table without limit. */
-.wrap-text {
-  min-width: 140px;
-  max-width: 320px;
+/* A name or address can be long and without spaces, and must still fit inside the card. */
+.card-name {
+  font-size: 16px;
+  font-weight: 700;
   overflow-wrap: anywhere;
 }
 
-.no-wrap {
-  white-space: nowrap;
+.card-url {
+  flex: 1 1 200px;
+  min-width: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.card-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.detail {
+  overflow-wrap: anywhere;
+}
+
+/* Shows that there is a tooltip with more about the certificate. */
+.detail[title] {
+  text-decoration: underline dotted;
+  cursor: help;
 }
 
 /* The text is always there as well, so that the status never depends on seeing the colour. */
 .status {
   display: inline-block;
+  min-width: 52px;
   padding: 2px 8px;
   border-radius: 4px;
   font-size: 13px;
   font-weight: 700;
+  text-align: center;
 }
 
 .status-up {
@@ -143,6 +169,11 @@ th {
   color: var(--down);
 }
 
+.status-pending {
+  background: var(--pending-background);
+  color: var(--pending);
+}
+
 .status-unknown {
   background: var(--unknown-background);
   color: var(--unknown);
@@ -150,12 +181,41 @@ th {
 
 .paused {
   display: inline-block;
-  margin-left: 6px;
   padding: 2px 8px;
   border: 1px solid var(--line);
   border-radius: 4px;
   color: var(--muted);
   font-size: 13px;
+}
+
+/* The letter is always there as well, so that the grade never depends on seeing the colour. */
+.grade {
+  min-width: 34px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 18px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.grade-good {
+  background: var(--up-background);
+  color: var(--up);
+}
+
+.grade-warn {
+  background: var(--pending-background);
+  color: var(--pending);
+}
+
+.grade-bad {
+  background: var(--down-background);
+  color: var(--down);
+}
+
+.grade-none {
+  background: var(--unknown-background);
+  color: var(--unknown);
 }
 
 .stale {

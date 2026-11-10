@@ -12,10 +12,12 @@ public class DashboardFilesTests
     [InlineData(Development, "/index.html", "text/html")]
     [InlineData(Development, "/dashboard.css", "text/css")]
     [InlineData(Development, "/dashboard.js", "text/javascript")]
+    [InlineData(Development, "/dashboard-logic.js", "text/javascript")]
     [InlineData(Production, "/", "text/html")]
     [InlineData(Production, "/index.html", "text/html")]
     [InlineData(Production, "/dashboard.css", "text/css")]
     [InlineData(Production, "/dashboard.js", "text/javascript")]
+    [InlineData(Production, "/dashboard-logic.js", "text/javascript")]
     public async Task AFileIsServedWithTheRightContentType(string environment, string path, string expectedType)
     {
         await using TestApp app = new TestApp(environment);
@@ -33,6 +35,7 @@ public class DashboardFilesTests
     [InlineData("/index.html")]
     [InlineData("/dashboard.css")]
     [InlineData("/dashboard.js")]
+    [InlineData("/dashboard-logic.js")]
     public async Task AFileMustBeCheckedAgainBeforeItIsReused(string path)
     {
         await using TestApp app = new TestApp();
@@ -51,8 +54,24 @@ public class DashboardFilesTests
 
         string page = await client.GetStringAsync("/");
 
+        Assert.Contains("<script src=\"/dashboard-logic.js\"></script>", page);
         Assert.Contains("<script src=\"/dashboard.js\"></script>", page);
         Assert.Contains("<link rel=\"stylesheet\" href=\"/dashboard.css\">", page);
+    }
+
+    // dashboard.js calls the functions in dashboard-logic.js as soon as it runs, so they must exist first.
+    [Fact]
+    public async Task TheLogicIsLoadedBeforeTheScriptThatUsesIt()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+
+        string page = await client.GetStringAsync("/");
+        int logicPosition = page.IndexOf("/dashboard-logic.js");
+        int scriptPosition = page.IndexOf("/dashboard.js");
+
+        Assert.True(logicPosition >= 0, "The logic file is not loaded.");
+        Assert.True(logicPosition < scriptPosition, "The logic file is loaded after the script.");
     }
 
     // Only the wwwroot folder is served. The database and the settings sit one level above it.

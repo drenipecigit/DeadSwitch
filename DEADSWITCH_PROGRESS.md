@@ -20,7 +20,7 @@ DeadSwitch is a personal uptime monitor. The backend is **not finished**: see th
 
 | Method and route | Purpose |
 |---|---|
-| `GET /` | The dashboard: `index.html`, `dashboard.js` and `dashboard.css` from `wwwroot` |
+| `GET /` | The dashboard: `index.html`, `dashboard-logic.js`, `dashboard.js` and `dashboard.css` from `wwwroot` |
 | `GET /health` | Health of the API itself |
 | `POST /services` | Register a service |
 | `GET /services` | List services |
@@ -142,7 +142,13 @@ Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, s
 
 ## Latest verified result
 
-Date: 2026-11-10, on `refactor/check-async`.
+Date: 2026-11-10, on `feat/dashboard-design`.
+
+- `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
+- `dotnet test DeadSwitch.slnx`: 1554 passed, 0 failed, 0 skipped, on the final code. Run on Windows 10.0.26200. **Nothing has been run on Linux.**
+- The card design changes only the dashboard's files and the tests. No API field, table or migration was changed. See "The dashboard as cards".
+
+Before this, on `refactor/check-async`:
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
 - `dotnet test DeadSwitch.slnx`: 1479 passed, 0 failed, 0 skipped, on the final code. Run on Windows 10.0.26200, `win-x64`, SDK 10.0.301. **Nothing has been run on Linux.**
@@ -166,6 +172,49 @@ The numbers below are from 2026-11-09, when 1221 tests passed, and are kept for 
 - 153 come from phase 2: 60 classify webhook addresses, 12 test the rule directly, 29 test the real notifier with a stub handler, 2 test the registered handler against a local server, 13 run the real registration with a stub handler, 36 use the API, the worker or the migrations with a fake notifier, and 1 reads the settings files.
 - Without the 68 tests that carry the trait `NameLookupWithoutConnector`: 1153 passed.
 - No test sends anything to Discord. Real messages are confirmed by the owner's run; see "Manual run".
+
+### The dashboard as cards
+
+The table with twelve columns became one card per service. The top row has the status badge, the name, the URL and the grade box. A smaller row below has the details. A summary such as `2 UP | 1 DOWN | 1 waiting for confirmation` is shown above the cards, and every time is written as `2026-11-10 13:08:59` in local time with 24 hours.
+
+**The status badge.** `currentStatus` and `lastKnownStatus` are merged into one badge. The server only writes DOWN as the last known status after two failed checks in a row, so DOWN in both is a confirmed DOWN, and DOWN now without DOWN before is exactly one failed check. `failedChecksInARow` is not needed and is not part of the overview.
+
+| Current | Last known | Can happen | Badge | Detail |
+|---|---|---|---|---|
+| UP | UP | Yes | Green `UP` | |
+| UP | null or DOWN | No, UP is confirmed at once | Green `UP` | |
+| DOWN | DOWN | Yes | Red `DOWN` | `Confirmed after 2 failed checks in a row` |
+| DOWN | UP or null | Yes | Yellow `DOWN?` | `1 failed check, no alarm yet` |
+| UNKNOWN | null | Yes | Grey `UNKNOWN` | |
+| UNKNOWN | UP or DOWN | Yes | Grey `UNKNOWN` | `Last confirmed: UP` or `Last confirmed: DOWN` |
+| Any other value | Any | No | Grey `UNKNOWN` | As for UNKNOWN |
+
+The confirmed text does not say "alarm sent", because the overview cannot know whether Discord was turned on or the send succeeded. The cards are sorted as confirmed DOWN, unconfirmed DOWN, UNKNOWN and UP, and by lower case name inside each group.
+
+**The grade box.** The server gives A, B, C, D or F (`SecurityHeaderRule.GradeFor`); E never comes. A and B are green, C and D yellow, E and F red, and anything else, null included, is a grey `-`. Each class name is one of the page's own, compared with fixed letters, so no value from the server becomes a class.
+
+**The certificate.** A date gives the server's text (`14 days left`) with `Not valid after <date>` as a tooltip. Only the exact text of `CertificateReasons.NotValid` gives `Invalid`. Every other reason (no new handshake, not https, or a reason no version knows) gives `Not assessed`. Both show the reason as a tooltip. With nothing known the field is hidden.
+
+**Hidden fields.** A field with nothing to say is not shown: no missing headers, no redirect, no response time, no failure reason, and no certificate information.
+
+**How it is built.** The decisions are pure functions in `dashboard-logic.js`, with no access to the page. `dashboard.js` only builds the page from what they return, and writes every value through `textContent` or `title`. Both files are loaded as our own files, so the Content Security Policy is unchanged.
+
+**How it is tested.** `DashboardLogicTests` runs `dashboard-logic.js` in Jint 4.17.0 (BSD-2-Clause, by Sebastien Ros), a JavaScript engine written in .NET, in a fixed time zone of UTC+1. It is the first test package that runs JavaScript. The time tests use the exact formats the API sends, with Z and none to seven decimals, and one test takes the time from a real overview answer. `dashboard.js` is not run: its text is tested so that it only sets `textContent`, `title`, `className` and `hidden`, and builds the cards from the sorted list.
+
+Red run: against a logic file with empty functions and the old page, 69 of 1550 tests failed, all of them new or changed. 15 of them failed with `ArgumentException` from Jint, because an empty function answered null where an object or a text was read; the rest failed on assertions. The new tests that passed expect a hidden field, which an empty function also gives. They are proven by the mutations.
+
+Mutation check: 46 mutations, one at a time, with a backup and the full test run, and each file checked to be the same afterwards. Nothing was committed and nothing left the machine. 40 were found at once. Two survivors (cards not sorted, the update time in the browser's own format) were closed with two text tests and run again. Four remain:
+
+| Mutation | Why it survives |
+|---|---|
+| `sortServices` sorts the server's own list | Nothing uses the list in its first order afterwards, so the page does not change |
+| A missing badge detail still added | `dashboard.js` is not run in a test. It would add an empty line |
+| `Paused` on the wrong services | `dashboard.js` is not run in a test |
+| The yellow colour removed from the CSS | No test reads colours. The text `DOWN?` is still there |
+
+Contrast (WCAG), text on its background: light green 6.41, red 6.51, yellow 6.59, grey 5.02, details 6.00; dark green 8.70, red 7.90, yellow 9.25, grey 7.59, details 6.74. All are above 4.5:1. A stale page is shown at 55 % opacity on purpose, which lowers the contrast.
+
+Not proven: how a real browser reads the times and builds the cards, summer time (only a fixed UTC+1 zone is tested), and the light theme. The names are sorted by character code, which does not give Swedish order for the three letters after z. The manual test has not been run yet.
 
 ### Red runs and mutation check of the DOWN confirmation
 
@@ -1376,7 +1425,9 @@ Check records saved before this rule keep their old status: an earlier 3xx stays
 - Two reads can in rare cases give a record newer than the status beside it. The next update corrects it.
 - A name with characters that change the writing direction can look odd in the table. It is shown as text and cannot run anything.
 - The dashboard shows the whole URL, including any query. The page is local and shows the owner's own data, while Discord is a third party and gets no query. A screenshot for the README must not show a URL with a secret in it.
-- The dashboard cannot be tested without a browser. Playwright would need new packages and a downloaded browser, so it has not been added.
+- The dashboard's decisions run in Jint in the tests, but the page itself cannot be tested without a browser. Playwright would need new packages and a downloaded browser, so it has not been added.
+- Jint and a browser can read a time text differently. The seven decimals the API sends are not in the date format of the JavaScript standard, which only describes three. Jint reads them in the tests, and the owner's Chrome run on 2026-11-05 showed a local time from such an answer, but the new format has not been seen in a browser yet.
+- The cards are sorted by character code, so the three Swedish letters after z are not in Swedish order.
 - The browser asks for `favicon.ico`, which does not exist and is refused by the policy, so one line in the console is expected.
 - A security grade measures whether five headers are present, not whether their values are good. `Strict-Transport-Security: max-age=0` and a policy with `unsafe-inline` both count. Every header weighs the same, and a site with `frame-ancestors` but no `X-Frame-Options` counts as missing one.
 - A service that answers with a redirect or over `http` never gets a grade, and only the page itself can be assessed: the target of a redirect is not visited.
@@ -1488,7 +1539,7 @@ The dashboard:
 
 It only reads. There is no login, so a button would give anyone on the machine an easier way to change data, and writing from a page needs a CSRF protection that belongs with the login. With one `fetch` that only reads, a test can also show that the script does not write.
 
-Names, addresses and failure reasons come from users and servers, and reach the page through `textContent` only. Addresses are never links. Failure reasons are fixed texts or `HTTP` and a status code today, but they are treated the same way.
+Names, addresses and failure reasons come from users and servers, and reach the page through `textContent` only, or as a tooltip through the `title` property. Addresses are never links. Class names are always the page's own. Failure reasons are fixed texts or `HTTP` and a status code today, but they are treated the same way.
 
 | Header | Value | Why |
 |---|---|---|
@@ -1537,7 +1588,7 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes early so that every new feature is visible in it at once. The MVP still covers phases 1 to 4; the dashboard is built earlier but is not part of the MVP. Each task is one branch, with a plan approved first.
 
-**Next step:** `feat/security-warnings` is done and merged. The manual test of `feat/redirect-target` passed on 2026-11-10, and the owner reviews and merges it. The next task is of its own: a single timeout still gives DOWN and UP messages (`StatusChangeRule`).
+**Next step:** `feat/dashboard-design` is built and proven by tests. The owner runs the manual test, then reviews and merges it. The manual test of the DOWN confirmation (`fix/single-timeout`) is still to be run.
 
 ### Phase 1: Stable foundation
 
@@ -1565,6 +1616,7 @@ Built on `feat/discord-notifications` and confirmed by the owner's manual run, e
 Built on `feat/dashboard` and merged. The server side is verified by tests, and the page by the owner's run in Chrome, except for the parts listed under "Not run manually".
 
 - A simple web page showing all services, status and response time. Phase 3 adds certificate days left and header grade to it.
+- `feat/dashboard-design`: one card per service instead of a table. Built and proven by tests; the manual test is still to be run. See "The dashboard as cards".
 - The dashboard runs locally only until the authentication in phase 6 is done.
 - The simplest technology that is enough, for example a static HTML page calling the API. No heavy frontend framework without a reason.
 
