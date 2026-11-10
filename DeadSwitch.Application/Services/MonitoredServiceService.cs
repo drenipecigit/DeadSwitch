@@ -190,19 +190,15 @@ public class MonitoredServiceService
     }
 
     // Returns null both when the service does not exist and when onlyIfDue skips it.
+    // Reads from top to bottom: is it due, take the lock, check and save, release the lock, notify.
     public async Task<CheckRecord?> CheckAsync(Guid id, bool onlyIfDue = false, CancellationToken ct = default)
     {
         if (onlyIfDue)
         {
             // Checked before the lock, so a pass that has nothing to do never holds the lock.
             // Otherwise a manual check arriving at that moment would wrongly get 409.
-            MonitoredService? serviceBeforeLock = await _repository.GetByIdAsync(id, ct);
-            if (serviceBeforeLock == null)
-            {
-                return null;
-            }
-
-            if (!IsDue(serviceBeforeLock))
+            bool isDue = await IsDueBeforeTheLockAsync(id, ct);
+            if (!isDue)
             {
                 return null;
             }
@@ -215,109 +211,12 @@ public class MonitoredServiceService
             throw new CheckInProgressException();
         }
 
-        CheckRecord record;
-        StatusChange? statusChange = null;
-        List<SecurityWarning> securityWarnings;
+        CheckOutcome? outcome;
 
         try
         {
-            // Read again inside the lock: a manual check can have finished after the first read.
-            MonitoredService? service = await _repository.GetByIdAsync(id, ct);
-            if (service is null)
-            {
-                return null;
-            }
-
-            if (onlyIfDue && !IsDue(service))
-            {
-                return null;
-            }
-
-            // Read before the probe, so a check's time means when it started. If it meant when the
-            // check ended, every response time would push the next check later.
-            DateTimeOffset checkedAt = _clock.GetUtcNow();
-
-            ProbeResult result = await _probe.CheckAsync(service.Url, service.TimeoutSeconds, ct);
-
-            // A cancelled check says nothing about the service, so it must not be saved.
-            ct.ThrowIfCancellationRequested();
-
-            record = new CheckRecord();
-            record.Id = Guid.NewGuid();
-            record.MonitoredServiceId = id;
-            record.Url = service.Url;
-            record.CheckedAtUtc = checkedAt.UtcDateTime;
-            record.Status = result.Status;
-            record.StatusCode = result.StatusCode;
-            record.ResponseTimeMs = result.ResponseTimeMs;
-            record.FailureReason = result.FailureReason;
-
-            // Null when no response was received, and then the three fields stay empty.
-            if (result.SecurityHeaders != null)
-            {
-                record.SecurityGrade = result.SecurityHeaders.Grade;
-                record.MissingSecurityHeaders = result.SecurityHeaders.MissingHeaders;
-                record.SecurityNotAssessedReason = result.SecurityHeaders.NotAssessedReason;
-            }
-
-            // Null when nothing can be said about the certificate, and then the two fields stay empty.
-            if (result.Certificate != null)
-            {
-                record.CertificateNotAfterUtc = result.Certificate.NotAfterUtc;
-                record.CertificateNotAssessedReason = result.Certificate.NotAssessedReason;
-            }
-
-            // Null when the response said nothing about a redirect, and then the two fields stay empty.
-            if (result.RedirectTarget != null)
-            {
-                record.RedirectFinding = result.RedirectTarget.Finding;
-                record.RedirectTargetHost = result.RedirectTarget.Host;
-            }
-
-            // Must be found before LastCheckedAt is overwritten and the check is saved below. Not inside a
-            // try: a shutdown here must stop the check like any other cancellation, and nothing is saved.
-            securityWarnings = await _securityWarningFinder.FindAsync(service, record, ct);
-
-            // Must be read before CurrentStatus is overwritten below.
-            bool becameUnknown = result.Status == ServiceStatus.Unknown && service.CurrentStatus != ServiceStatus.Unknown;
-
-            // Saved with the check below, so the row of failed checks survives a restart. Inside the
-            // lock, so a manual check and the worker can never count at the same time.
-            service.FailedChecksInARow = DownConfirmationRule.NextFailedChecksInARow(service.FailedChecksInARow, result.Status);
-
-            // Null after a single failed check, or after Unknown. Then no alarm is sent, and what is
-            // already known stays as it is.
-            ServiceStatus? confirmedStatus = DownConfirmationRule.ConfirmedStatus(result.Status, service.FailedChecksInARow);
-
-            // Must be decided before LastKnownStatus is overwritten below.
-            if (confirmedStatus != null && StatusChangeRule.ShouldNotify(service.LastKnownStatus, confirmedStatus.Value))
-            {
-                statusChange = new StatusChange(
-                    id,
-                    service.Name,
-                    service.Url,
-                    service.LastKnownStatus,
-                    confirmedStatus.Value,
-                    checkedAt,
-                    result.FailureReason);
-            }
-
-            // Shows what this check saw, also when it is not confirmed yet. Only the alarm waits.
-            service.CurrentStatus = record.Status;
-            service.LastCheckedAt = checkedAt;
-
-            if (confirmedStatus != null)
-            {
-                service.LastKnownStatus = confirmedStatus.Value;
-            }
-
-            await _repository.SaveCheckAsync(service, record, ct);
-
-            // Worth seeing, because it can mean that the name now points to a private address.
-            if (becameUnknown)
-            {
-                _logger.LogWarning("Service {ServiceId} changed to UNKNOWN. No notification is sent.", id);
-            }
+            // Everything from reading the service to saving the check happens inside the lock.
+            outcome = await CheckAndSaveAsync(id, onlyIfDue, ct);
         }
         finally
         {
@@ -325,21 +224,169 @@ public class MonitoredServiceService
             _locks.Release(id);
         }
 
+        if (outcome == null)
+        {
+            return null;
+        }
+
         // After the lock, so that a slow channel never makes an update wait or a manual check get 409.
         // After the save, so that an alarm is never sent for a check that was not saved.
-        if (statusChange != null)
+        await SendAfterSaveAsync(outcome);
+
+        return outcome.Record;
+    }
+
+    // Reads without the lock. False when the service does not exist or is not due yet.
+    private async Task<bool> IsDueBeforeTheLockAsync(Guid id, CancellationToken ct)
+    {
+        MonitoredService? serviceBeforeLock = await _repository.GetByIdAsync(id, ct);
+        if (serviceBeforeLock == null)
         {
-            await SendNotificationAsync(statusChange);
+            return false;
+        }
+
+        return IsDue(serviceBeforeLock);
+    }
+
+    // Must only be called while the lock is held. Null when the service does not exist or is not due.
+    // The order of the steps matters, and each step that depends on it says why.
+    private async Task<CheckOutcome?> CheckAndSaveAsync(Guid id, bool onlyIfDue, CancellationToken ct)
+    {
+        // Read again inside the lock: a manual check can have finished after the first read.
+        MonitoredService? service = await _repository.GetByIdAsync(id, ct);
+        if (service is null)
+        {
+            return null;
+        }
+
+        if (onlyIfDue && !IsDue(service))
+        {
+            return null;
+        }
+
+        // Read before the probe, so a check's time means when it started. If it meant when the
+        // check ended, every response time would push the next check later.
+        DateTimeOffset checkedAt = _clock.GetUtcNow();
+
+        ProbeResult result = await _probe.CheckAsync(service.Url, service.TimeoutSeconds, ct);
+
+        // A cancelled check says nothing about the service, so it must not be saved.
+        ct.ThrowIfCancellationRequested();
+
+        CheckRecord record = CreateCheckRecord(service, checkedAt, result);
+
+        // Must be found before LastCheckedAt is overwritten and the check is saved below. Not inside a
+        // try: a shutdown here must stop the check like any other cancellation, and nothing is saved.
+        List<SecurityWarning> securityWarnings = await _securityWarningFinder.FindAsync(service, record, ct);
+
+        // Must be read before CurrentStatus is overwritten below.
+        bool becameUnknown = result.Status == ServiceStatus.Unknown && service.CurrentStatus != ServiceStatus.Unknown;
+
+        // After the two steps above, because it overwrites what they read.
+        StatusChange? statusChange = ApplyResultToService(service, record, checkedAt);
+
+        await _repository.SaveCheckAsync(service, record, ct);
+
+        // Worth seeing, because it can mean that the name now points to a private address.
+        if (becameUnknown)
+        {
+            _logger.LogWarning("Service {ServiceId} changed to UNKNOWN. No notification is sent.", id);
+        }
+
+        return new CheckOutcome(record, statusChange, securityWarnings);
+    }
+
+    // Only copies what the probe saw into a new history record. Nothing is decided here.
+    private static CheckRecord CreateCheckRecord(MonitoredService service, DateTimeOffset checkedAt, ProbeResult result)
+    {
+        CheckRecord record = new CheckRecord();
+        record.Id = Guid.NewGuid();
+        record.MonitoredServiceId = service.Id;
+        record.Url = service.Url;
+        record.CheckedAtUtc = checkedAt.UtcDateTime;
+        record.Status = result.Status;
+        record.StatusCode = result.StatusCode;
+        record.ResponseTimeMs = result.ResponseTimeMs;
+        record.FailureReason = result.FailureReason;
+
+        // Null when no response was received, and then the three fields stay empty.
+        if (result.SecurityHeaders != null)
+        {
+            record.SecurityGrade = result.SecurityHeaders.Grade;
+            record.MissingSecurityHeaders = result.SecurityHeaders.MissingHeaders;
+            record.SecurityNotAssessedReason = result.SecurityHeaders.NotAssessedReason;
+        }
+
+        // Null when nothing can be said about the certificate, and then the two fields stay empty.
+        if (result.Certificate != null)
+        {
+            record.CertificateNotAfterUtc = result.Certificate.NotAfterUtc;
+            record.CertificateNotAssessedReason = result.Certificate.NotAssessedReason;
+        }
+
+        // Null when the response said nothing about a redirect, and then the two fields stay empty.
+        if (result.RedirectTarget != null)
+        {
+            record.RedirectFinding = result.RedirectTarget.Finding;
+            record.RedirectTargetHost = result.RedirectTarget.Host;
+        }
+
+        return record;
+    }
+
+    // Updates the service with this check and returns the status change to notify about, or null.
+    // The record's status and reason are the probe's own values, copied in CreateCheckRecord.
+    private static StatusChange? ApplyResultToService(MonitoredService service, CheckRecord record, DateTimeOffset checkedAt)
+    {
+        // Saved with the check, so the row of failed checks survives a restart. Inside the lock, so a
+        // manual check and the worker can never count at the same time.
+        service.FailedChecksInARow = DownConfirmationRule.NextFailedChecksInARow(service.FailedChecksInARow, record.Status);
+
+        // Null after a single failed check, or after Unknown. Then no alarm is sent, and what is
+        // already known stays as it is.
+        ServiceStatus? confirmedStatus = DownConfirmationRule.ConfirmedStatus(record.Status, service.FailedChecksInARow);
+
+        StatusChange? statusChange = null;
+
+        // Must be decided before LastKnownStatus is overwritten below.
+        if (confirmedStatus != null && StatusChangeRule.ShouldNotify(service.LastKnownStatus, confirmedStatus.Value))
+        {
+            statusChange = new StatusChange(
+                service.Id,
+                service.Name,
+                service.Url,
+                service.LastKnownStatus,
+                confirmedStatus.Value,
+                checkedAt,
+                record.FailureReason);
+        }
+
+        // Shows what this check saw, also when it is not confirmed yet. Only the alarm waits.
+        service.CurrentStatus = record.Status;
+        service.LastCheckedAt = checkedAt;
+
+        if (confirmedStatus != null)
+        {
+            service.LastKnownStatus = confirmedStatus.Value;
+        }
+
+        return statusChange;
+    }
+
+    // The status message first, then the security warnings, the same order as always.
+    private async Task SendAfterSaveAsync(CheckOutcome outcome)
+    {
+        if (outcome.StatusChange != null)
+        {
+            await SendNotificationAsync(outcome.StatusChange);
         }
 
         // Does not stop for a shutdown, the same as the message above: the check is saved, so the next
         // check sees no change, and a warning stopped here would be lost. Each send limits its own time.
-        foreach (SecurityWarning warning in securityWarnings)
+        foreach (SecurityWarning warning in outcome.SecurityWarnings)
         {
             await SendSecurityWarningAsync(warning);
         }
-
-        return record;
     }
 
     // Catches everything on purpose: the check is already saved, so a failed notification must not
@@ -413,4 +460,7 @@ public class MonitoredServiceService
         service.TimeoutSeconds = configuration.TimeoutSeconds;
         service.IsEnabled = configuration.IsEnabled;
     }
+
+    // Carries what the check found out of the lock, so that the notifications can be sent after it.
+    private sealed record CheckOutcome(CheckRecord Record, StatusChange? StatusChange, List<SecurityWarning> SecurityWarnings);
 }

@@ -1,6 +1,6 @@
 # DeadSwitch progress
 
-Updated: 2026-11-09.
+Updated: 2026-11-10.
 
 DeadSwitch is a personal uptime monitor. The backend is **not finished**: see the MVP status below.
 
@@ -13,7 +13,7 @@ DeadSwitch is a personal uptime monitor. The backend is **not finished**: see th
 | `DeadSwitch.Domain` | `MonitoredService`, `CheckRecord`, `ServiceStatus`, `StatusChangeRule`, `SecurityHeaderRule`, `CertificateExpiryRule`, `CertificateWarningRule`, `CertificateFinding`, `CertificateReasons`, `RedirectFinding`, `RedirectWarningRule` | nothing |
 | `DeadSwitch.Application` | `MonitoredServiceService`, `ServiceOverview`, `ServiceConfiguration`, `UrlSafety`, `ServiceLocks`, `ServiceValidationException`, `CheckInProgressException`, `NotificationFailedException`, `StatusChange`, `SecurityHeaderCheck`, `CertificateCheck`, `SecurityWarning`, `SecurityWarningFinder`, `SecurityWarningSettings`, `RedirectTargetCheck`, `RedirectTargetParser`, interfaces including `INotifier` | Domain |
 | `DeadSwitch.Infrastructure` | `DeadSwitchDbContext`, repository, `HttpHealthProbe`, `SecurityHeaderReader`, `RedirectTargetReader`, `TlsHandshakeRecorder`, `TlsHandshake`, `ProtectedHttpHandler`, `PublicInternetConnector`, `DestinationBlockedException`, `DiscordNotifier`, `DiscordMessage`, `DiscordOptions`, `DiscordWebhookUrl`, migrations | Application, Domain |
-| `DeadSwitch.Api` | Startup in `Program.cs`, `ServiceEndpoints`, `RegisterServiceRequest`, `UpdateServiceRequest`, `UtcDateTimeOffsetConverter`, `MonitoringWorker`, `SecurityHeaders`, `CrossSiteRequests`, `LocalOnlyCheck`, and the dashboard in `wwwroot` | Application, Domain, Infrastructure |
+| `DeadSwitch.Api` | Startup in `Program.cs`, `ServiceEndpoints`, `RegisterServiceRequest`, `UpdateServiceRequest`, `UtcDateTimeOffsetConverter`, `MonitoringWorker`, `SecurityHeaders`, `CrossSiteRequests`, `ExpectedErrors`, `LocalOnlyCheck`, and the dashboard in `wwwroot` | Application, Domain, Infrastructure |
 | `DeadSwitch.Tests` | Automated tests | Api, and the other projects through it |
 
 ## Endpoints
@@ -142,11 +142,14 @@ Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, s
 
 ## Latest verified result
 
-Date: 2026-11-10, on `fix/single-timeout`.
+Date: 2026-11-10, on `refactor/check-async`.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
-- `dotnet test DeadSwitch.slnx`: 1473 passed, 0 failed, 0 skipped, on the final code. Run on Windows 10.0.26200, `win-x64`, SDK 10.0.301. **Nothing has been run on Linux.**
-- `dotnet ef migrations has-pending-model-changes`: no changes.
+- `dotnet test DeadSwitch.slnx`: 1479 passed, 0 failed, 0 skipped, on the final code. Run on Windows 10.0.26200, `win-x64`, SDK 10.0.301. **Nothing has been run on Linux.**
+- The split of `CheckAsync` and of the error translation adds 6 tests and changes none; see "Splitting CheckAsync and the error translation".
+
+On 2026-11-10 on `fix/single-timeout`, before the split, 1473 tests passed, and `dotnet ef migrations has-pending-model-changes` reported no changes. The split touches no model and adds no migration.
+
 - The DOWN confirmation adds 40 tests: 14 test `DownConfirmationRule` directly, 18 the whole flow through the API, the worker and the database with a fake probe and a fake notifier, 5 the real Discord message, 2 that POST and PUT cannot set the count or the status, and 1 the migration. 30 older test methods were changed so that they make two failed checks, and `MessageWithoutAPreviousStatusSaysFirstCheck` was replaced; see "Red runs and mutation check of the DOWN confirmation". No automated test reaches a real website or Discord.
 
 On 2026-11-10 on `feat/redirect-target`, before the DOWN confirmation, 1434 tests passed.
@@ -217,6 +220,65 @@ Not shown by this comparison:
 - `CheckUrlTimeoutSeconds` and `DefaultHistoryTake`: the first needs a real outgoing check and the second more than 50 records, so these values were only read in the diff.
 - A check through `POST`, `GET /services/{id}/check` or the worker against a real website. These are covered by tests with a fake probe.
 - That the comparison would have noticed a changed value. It was not run against code broken on purpose.
+
+### Splitting CheckAsync and the error translation
+
+`refactor/check-async` changes how two pieces of code are laid out, and not what they do.
+
+- `MonitoredServiceService.CheckAsync` reads from top to bottom: is the service due, take the lock, `CheckAndSaveAsync`, release the lock in `finally`, `SendAfterSaveAsync`. The lock is still taken and released in `CheckAsync` itself. Everything that ran inside the lock before runs inside `CheckAndSaveAsync`, in the same order, and the notifications are still sent after the lock: the status message first, then the security warnings. The other new methods are `IsDueBeforeTheLockAsync`, `CreateCheckRecord` and `ApplyResultToService`, and a small `CheckOutcome` record carries the result out of the lock.
+- The 34-line lambda in `Program.cs` that turned expected exceptions into Problem Details is now `ExpectedErrors.TranslateAsync` in `DeadSwitch.Api/Errors`, registered in the same place in the pipeline. The status codes, titles and texts are the same.
+
+Not every line was moved word for word. `CreateCheckRecord` and `ApplyResultToService` read `service.Id` instead of the `id` parameter, which is the same value because the service was read with that id. `ApplyResultToService` reads the record's status and reason instead of the probe result's, which are the same values because the record copies them.
+
+No existing test was changed. Six tests were added where something was not covered:
+
+- 1 that the 409 answer has the fixed title and text.
+- 5 that the 409, 413 and 415 answers have all the security headers.
+
+Each new test was green against the code before the split. Each one is proven by a change that makes only that test fail.
+
+The test names before and after are the same, apart from the six new ones. Every changed piece was then broken on purpose, one at a time, and the file was restored from a copy afterwards. The checksums of all `.cs` files were identical before and after.
+
+| Change made on purpose | Tests that failed |
+|---|---|
+| The check is not saved | 199 |
+| The security warnings are sent before the status message | 1 |
+| The notifications are sent inside the lock | 2 |
+| The status message is sent before the check is saved | 3 |
+| The lock is released before the check and the save | 7 |
+| The lock is never released | 199 |
+| The warnings are looked for after the service is updated and saved | 75 |
+| UNKNOWN is read after the status is overwritten | 1 |
+| A cancelled check is not stopped | 1 |
+| The second "is it due" inside the lock is removed | 1 |
+| The first "is it due" before the lock is removed | 3 |
+| The record loses the redirect host | 6 |
+| The record loses the certificate date | 42 |
+| `LastCheckedAt` is not set | 126 |
+| The status change does not leave the lock | 35 |
+| The warnings do not leave the lock | 72 |
+| The 415 answer is not written | 2 |
+| `CheckInProgressException` is not caught | 4 |
+| The 409 title is changed | 1 |
+| A bad request shows the exception's text | 18 |
+| A validation error gives 422 | 112 |
+| The error translation is placed before the exception handler | 138 |
+| The security headers are added after the error translation and the static files | 11 |
+| The security headers are left out of a 409, a 413 or a 415 answer | 1, 2 and 2 |
+| The error translation swaps places with the cross-site check | **0** |
+| The error translation is registered after `ServiceEndpoints.Map` | **0** |
+
+The two rows with 0 failing tests are moves that change nothing, so they cannot fail a test:
+
+- The cross-site check never throws the exceptions that the translation catches, and it only writes a 403.
+- A minimal API runs every `app.Use` before the endpoints, wherever `Map` is written.
+
+The six new tests passed in both runs, so the error answers kept their security headers.
+
+Not shown:
+
+- A real server: the split was only run through the tests, and the earlier comparison of 45 requests against Kestrel was not repeated.
+- That the time the lock is held is unchanged. Only method calls and one object were added, but nothing was measured.
 
 ### Cost of reused connections
 
@@ -1344,7 +1406,7 @@ These parts do not yet follow the project's plain style, on purpose:
 - The queries in the repository stay as LINQ, because EF Core translates them to SQL.
 - `UtcDateTimeOffsetConverter` is a class with an abstract `Read` method that no request uses, because `System.Text.Json` has no setting for the time format.
 - `UrlSafety.GetConnectionHost` uses `try`/`catch` and returns null. `Uri.IdnHost` has no version that avoids the exception, and a host that cannot be converted must be rejected.
-- `Program.cs` checks for 415 after the next middleware instead of catching an exception, because the framework throws nothing for a wrong content type.
+- `ExpectedErrors.TranslateAsync` checks for 415 after the next middleware instead of catching an exception, because the framework throws nothing for a wrong content type.
 - `DiscordWebhookUrl.IsAllowed` has many separate checks, some of which overlap. They are kept on purpose: the protection must not depend on how the other checks happen to work. The mutation check shows that removing the ASCII check changes no test.
 - `ValidateOnStart` is kept for Discord although the startup line reads the options anyway, for the same reason.
 - `MonitoredServiceService.SendNotificationAsync` catches `Exception` but does not pass it to the logger, because its text could hold the webhook address.

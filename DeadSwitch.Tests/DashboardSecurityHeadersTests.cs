@@ -1,4 +1,6 @@
 using System.Net;
+using System.Text;
+using Microsoft.AspNetCore.Http;
 
 namespace DeadSwitch.Tests;
 
@@ -53,6 +55,40 @@ public class DashboardSecurityHeadersTests
         HttpResponseMessage response = await client.GetAsync("/services");
 
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        AssertHasAllSecurityHeaders(response);
+    }
+
+    // The 415 is written by the error translation after the endpoint has run, so it is checked on its own.
+    [Theory]
+    [InlineData(Development)]
+    [InlineData(Production)]
+    public async Task WrongContentTypeAnswerHasAllSecurityHeaders(string environment)
+    {
+        await using TestApp app = new TestApp(environment);
+        await app.MigrateAsync();
+        using HttpClient client = app.CreateClient();
+        StringContent content = new StringContent("{}", Encoding.UTF8, "text/plain");
+
+        HttpResponseMessage response = await client.PostAsync("/services", content);
+
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
+        AssertHasAllSecurityHeaders(response);
+    }
+
+    // Thrown from the fake repository, because no test sends a body large enough to get a real 413.
+    [Theory]
+    [InlineData(Development)]
+    [InlineData(Production)]
+    public async Task TooLargeAnswerHasAllSecurityHeaders(string environment)
+    {
+        await using TestApp app = new TestApp(environment);
+        await app.MigrateAsync();
+        using HttpClient client = app.CreateClient();
+        app.RepositoryControl.ExceptionFromGetAll = new BadHttpRequestException("Too large.", StatusCodes.Status413PayloadTooLarge);
+
+        HttpResponseMessage response = await client.GetAsync("/services");
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
         AssertHasAllSecurityHeaders(response);
     }
 

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using DeadSwitch.Application.Interfaces;
 using DeadSwitch.Application.Services;
 using DeadSwitch.Domain;
@@ -11,6 +12,10 @@ namespace DeadSwitch.Tests;
 
 public class ServiceCheckTests
 {
+    // Written out here on purpose, so a weakened header in the code fails a test.
+    private const string ExpectedPolicy =
+        "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
     [Fact]
     public async Task ManualCheckSavesStatusAndHistory()
     {
@@ -124,6 +129,59 @@ public class ServiceCheckTests
         Assert.Equal(HttpStatusCode.Conflict, secondCheck.StatusCode);
 
         // Let the hanging check finish, so it does not outlive the test.
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => firstCheck);
+    }
+
+    // The texts are written out on purpose: they are part of what a client sees.
+    [Fact]
+    public async Task OverlappingCheckGivesTheFixed409Text()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService service = await app.RegisterServiceAsync(client, new ServiceConfiguration("Example", "https://example.com"));
+        await using AsyncServiceScope scope = app.Services.CreateAsyncScope();
+        MonitoredServiceService services = scope.ServiceProvider.GetRequiredService<MonitoredServiceService>();
+        using CancellationTokenSource cancellation = new CancellationTokenSource();
+        TaskCompletionSource started = HangProbeUntilCancelled(app.Probe);
+
+        Task<CheckRecord?> firstCheck = services.CheckAsync(service.Id, ct: cancellation.Token);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        HttpResponseMessage secondCheck = await client.PostAsync($"/services/{service.Id}/check", null);
+
+        Assert.Equal(HttpStatusCode.Conflict, secondCheck.StatusCode);
+        JsonElement body = await secondCheck.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("Check in progress", body.GetProperty("title").GetString());
+        Assert.Equal("A check or configuration change is already in progress. Retry later.", body.GetProperty("detail").GetString());
+
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => firstCheck);
+    }
+
+    // The 409 is written by the error translation, and not by an endpoint. It must still get the headers.
+    [Fact]
+    public async Task OverlappingCheckAnswerHasTheSecurityHeaders()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService service = await app.RegisterServiceAsync(client, new ServiceConfiguration("Example", "https://example.com"));
+        await using AsyncServiceScope scope = app.Services.CreateAsyncScope();
+        MonitoredServiceService services = scope.ServiceProvider.GetRequiredService<MonitoredServiceService>();
+        using CancellationTokenSource cancellation = new CancellationTokenSource();
+        TaskCompletionSource started = HangProbeUntilCancelled(app.Probe);
+
+        Task<CheckRecord?> firstCheck = services.CheckAsync(service.Id, ct: cancellation.Token);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        HttpResponseMessage secondCheck = await client.PostAsync($"/services/{service.Id}/check", null);
+
+        Assert.Equal(HttpStatusCode.Conflict, secondCheck.StatusCode);
+        Assert.Equal(ExpectedPolicy, Assert.Single(secondCheck.Headers.GetValues("Content-Security-Policy")));
+        Assert.Equal("nosniff", Assert.Single(secondCheck.Headers.GetValues("X-Content-Type-Options")));
+        Assert.Equal("DENY", Assert.Single(secondCheck.Headers.GetValues("X-Frame-Options")));
+        Assert.Equal("no-referrer", Assert.Single(secondCheck.Headers.GetValues("Referrer-Policy")));
+
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => firstCheck);
     }

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using DeadSwitch.Api.Endpoints;
+using DeadSwitch.Api.Errors;
 using DeadSwitch.Api.Json;
 using DeadSwitch.Api.Monitoring;
 using DeadSwitch.Api.Security;
@@ -137,44 +138,8 @@ app.UseStaticFiles(dashboardFiles);
 // After the files on purpose: they hold no data and change nothing, and a link to the page must work.
 app.Use(CrossSiteRequests.BlockAsync);
 
-const string UnreadableRequestTitle = "Invalid request";
-const string UnreadableRequestDetail = "The request could not be read.";
-
 // Translates the exceptions the Application layer uses for expected errors into status codes.
-app.Use(async (context, next) =>
-{
-    try
-    {
-        await next(context);
-
-        // A wrong content type throws nothing: the framework only sets 415 and leaves the body empty.
-        // It gets the same fixed answer here, so that every error has the same format.
-        if (context.Response.StatusCode == StatusCodes.Status415UnsupportedMediaType && !context.Response.HasStarted)
-        {
-            IResult problem = Results.Problem(statusCode: StatusCodes.Status415UnsupportedMediaType, title: UnreadableRequestTitle, detail: UnreadableRequestDetail);
-            await problem.ExecuteAsync(context);
-        }
-    }
-    catch (ServiceValidationException ex)
-    {
-        // Safe to show: this exception only ever holds fixed texts that we wrote ourselves.
-        IResult problem = Results.Problem(statusCode: 400, title: "Invalid configuration", detail: ex.Message);
-        await problem.ExecuteAsync(context);
-    }
-    catch (BadHttpRequestException ex)
-    {
-        // Fixed text on purpose: ex.Message names the parameter and the class, and the inner exception
-        // holds the JSON path and position. The status code is kept because it is not always 400:
-        // a body that is too large gives 413.
-        IResult problem = Results.Problem(statusCode: ex.StatusCode, title: UnreadableRequestTitle, detail: UnreadableRequestDetail);
-        await problem.ExecuteAsync(context);
-    }
-    catch (CheckInProgressException ex)
-    {
-        IResult problem = Results.Problem(statusCode: 409, title: "Check in progress", detail: ex.Message);
-        await problem.ExecuteAsync(context);
-    }
-});
+app.Use(ExpectedErrors.TranslateAsync);
 
 if (app.Environment.IsDevelopment())
 {
