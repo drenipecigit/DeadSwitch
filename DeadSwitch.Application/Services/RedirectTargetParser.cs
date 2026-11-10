@@ -137,8 +137,8 @@ public static class RedirectTargetParser
             return Unreadable;
         }
 
-        // .NET and browsers can pick different hosts when there is more than one @. Uri refuses this today,
-        // and the check stays so that the protection does not depend on how Uri happens to work.
+        // .NET and browsers can pick different hosts when there is more than one @.
+        // The check does not rely on Uri to refuse this.
         if (CountAtSignsInAuthority(absoluteValue) > 1)
         {
             return Unreadable;
@@ -169,7 +169,7 @@ public static class RedirectTargetParser
             return false;
         }
 
-        // Uri finds no host in https:///a today, while a browser does. Kept for the same reason as above.
+        // A third slash, as in https:///a, leaves no host here. The check does not rely on Uri to refuse this.
         return value[start.Length] != '/';
     }
 
@@ -254,7 +254,7 @@ public static class RedirectTargetParser
             return null;
         }
 
-        // Uri writes names in lower case today. The comparison must not depend on that.
+        // The comparison does not rely on Uri to write names in lower case.
         string host = connectionHost.Trim('[', ']').ToLowerInvariant();
 
         // Only one dot: a name that ends with two is not a valid name, and the check of labels stops it.
@@ -325,7 +325,7 @@ public static class RedirectTargetParser
             return false;
         }
 
-        // Uri refuses empty labels today, and this stays so that the allowlist is complete on its own.
+        // The check does not rely on Uri to refuse empty labels, so the allowlist is complete on its own.
         if (host.StartsWith('.') || host.EndsWith('.') || host.Contains("..", StringComparison.Ordinal))
         {
             return false;
