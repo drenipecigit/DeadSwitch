@@ -985,6 +985,10 @@ Security warnings, still proven by tests only:
 - How Discord shows a line separator or an invisible character. The tests prove what is sent.
 - A restart in the tests is a new worker against the same database, and not a new process.
 
+Redirect warning: manual test passed on 2026-11-10 with the worker, real Discord and https://httpbin.org/redirect-to to example.com. The first check gave OTHER_HOST with UP and no message. After the baseline was set to NoRedirect by hand in a separate database, exactly one warning arrived, both with the app running and after a real restart. Silent at the following checks and after one more restart. The dashboard showed example.com as plain text with no console errors. The marker zqx was found only in the service's own Url: not in the log, not in other columns and not in Discord. No webhook address in the log. Two sends, no failed sends. The ordinary database was untouched.
+
+Not run manually: INTERNAL_TARGET and UNREADABLE. httpbin answered 403 Forbidden for redirects to 127.0.0.1 and to a value with a backslash, so they are proven by tests only.
+
 Redirect target, proven by tests only until the owner's manual run:
 
 - A real redirect warning in Discord, and how Discord shows it: no link, no preview and no ping. The tests prove what is sent.
