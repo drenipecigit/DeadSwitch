@@ -247,6 +247,47 @@ public class RedirectWarningFlowTests
         Assert.Empty(scenario.GetWarnings());
     }
 
+    // The old rows of the first URL are still there, but changing back counts as starting over.
+    [Fact]
+    public async Task ChangingBackToAnEarlierUrlGivesNoWarningAtItsFirstCheck()
+    {
+        await using SecurityWarningScenario scenario = await SecurityWarningScenario.StartAsync();
+        await scenario.CheckAsync(TestProbeResults.NoRedirect());
+        await scenario.ChangeUrlAsync(SecurityWarningScenario.OtherUrl);
+        await scenario.ChangeUrlAsync(SecurityWarningScenario.ServiceUrl);
+
+        await scenario.CheckAsync(TestProbeResults.RedirectToOtherHost(HostA));
+
+        Assert.Empty(scenario.GetWarnings());
+    }
+
+    // A finding on the first URL says nothing about the second one, which has only had a timeout.
+    [Fact]
+    public async Task AFindingOnAnotherUrlIsNotAFindingToCompareWith()
+    {
+        await using SecurityWarningScenario scenario = await SecurityWarningScenario.StartAsync();
+        await scenario.CheckAsync(TestProbeResults.NoRedirect());
+        await scenario.ChangeUrlAsync(SecurityWarningScenario.OtherUrl);
+        await scenario.CheckAsync(TestProbeResults.Timeout());
+
+        await scenario.CheckAsync(TestProbeResults.RedirectToOtherHost(HostA));
+
+        Assert.Empty(scenario.GetWarnings());
+    }
+
+    [Fact]
+    public async Task AFindingOnAnotherServiceIsNotAFindingToCompareWith()
+    {
+        await using SecurityWarningScenario scenario = await SecurityWarningScenario.StartAsync();
+        MonitoredService other = await scenario.App.RegisterServiceAsync(scenario.Client, new ServiceConfiguration("Other", SecurityWarningScenario.ServiceUrl));
+        await CheckServiceAsync(scenario, other.Id, TestProbeResults.NoRedirect());
+        await scenario.CheckAsync(TestProbeResults.Timeout());
+
+        await scenario.CheckAsync(TestProbeResults.RedirectToOtherHost(HostA));
+
+        Assert.Empty(scenario.GetWarnings());
+    }
+
     // The target was seen on the first URL, and that says nothing about the second one.
     [Fact]
     public async Task ATargetSeenOnAnotherUrlStillWarns()
