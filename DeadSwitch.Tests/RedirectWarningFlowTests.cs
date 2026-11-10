@@ -11,6 +11,7 @@ public class RedirectWarningFlowTests
 {
     private const string HostA = "first.example";
     private const string HostB = "second.example";
+    private const string OtherServiceName = "Other";
 
     // One second less than the limit, because CheckAsync moves the clock one second before the check.
     private static readonly TimeSpan JustInsideTheWindow = TimeSpan.FromDays(30) - TimeSpan.FromSeconds(1);
@@ -275,11 +276,12 @@ public class RedirectWarningFlowTests
         Assert.Empty(scenario.GetWarnings());
     }
 
+    // The other service has the same URL, but its finding says nothing about this one, which has only had a timeout.
     [Fact]
     public async Task AFindingOnAnotherServiceIsNotAFindingToCompareWith()
     {
         await using SecurityWarningScenario scenario = await SecurityWarningScenario.StartAsync();
-        MonitoredService other = await scenario.App.RegisterServiceAsync(scenario.Client, new ServiceConfiguration("Other", SecurityWarningScenario.ServiceUrl));
+        MonitoredService other = await RegisterOtherServiceAsync(scenario);
         await CheckServiceAsync(scenario, other.Id, TestProbeResults.NoRedirect());
         await scenario.CheckAsync(TestProbeResults.Timeout());
 
@@ -307,7 +309,7 @@ public class RedirectWarningFlowTests
     public async Task ATargetSeenOnAnotherServiceStillWarns()
     {
         await using SecurityWarningScenario scenario = await SecurityWarningScenario.StartAsync();
-        MonitoredService other = await scenario.App.RegisterServiceAsync(scenario.Client, new ServiceConfiguration("Other", SecurityWarningScenario.ServiceUrl));
+        MonitoredService other = await RegisterOtherServiceAsync(scenario);
         await CheckServiceAsync(scenario, other.Id, TestProbeResults.RedirectToOtherHost(HostA));
         await scenario.CheckAsync(TestProbeResults.NoRedirect());
 
@@ -343,6 +345,13 @@ public class RedirectWarningFlowTests
 
         Assert.Empty(scenario.GetWarnings());
         Assert.Equal(3, await scenario.CountHistoryAsync());
+    }
+
+    // A second service with the same URL, so that only the service id differs.
+    private static async Task<MonitoredService> RegisterOtherServiceAsync(SecurityWarningScenario scenario)
+    {
+        ServiceConfiguration configuration = new ServiceConfiguration(OtherServiceName, SecurityWarningScenario.ServiceUrl);
+        return await scenario.App.RegisterServiceAsync(scenario.Client, configuration);
     }
 
     private static async Task CheckServiceAsync(SecurityWarningScenario scenario, Guid serviceId, ProbeResult result)
