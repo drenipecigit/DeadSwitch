@@ -985,14 +985,12 @@ Security warnings, still proven by tests only:
 - How Discord shows a line separator or an invisible character. The tests prove what is sent.
 - A restart in the tests is a new worker against the same database, and not a new process.
 
-Redirect warning: manual test passed on 2026-11-10 with the worker, real Discord and https://httpbin.org/redirect-to to example.com. The first check gave OTHER_HOST with UP and no message. After the baseline was set to NoRedirect by hand in a separate database, exactly one warning arrived, both with the app running and after a real restart. Silent at the following checks and after one more restart. The dashboard showed example.com as plain text with no console errors. The marker zqx was found only in the service's own Url: not in the log, not in other columns and not in Discord. No webhook address in the log. Two sends, no failed sends. The ordinary database was untouched.
+Redirect warning: manual test passed on 2026-11-10 with the worker, real Discord and https://httpbin.org/redirect-to to example.com. The first check gave OTHER_HOST with UP and no message. The baseline was set to NoRedirect by hand in a separate database twice: first by mistake while the app was running, then with the app stopped. Each change gave exactly one warning, the second one after a real restart. Silent at the following checks and after one more restart. The dashboard showed example.com as plain text with no console errors. The marker zqx was found only in the service's own Url: not in the log, not in other columns and not in Discord. No webhook address in the log. Two sends, one per change, and no failed sends. No certificate warning came, as httpbin.org had 85 days left. The ordinary database was untouched. Whether example.com was a link, showed a preview or pinged anyone in Discord was not checked explicitly.
 
 Not run manually: INTERNAL_TARGET and UNREADABLE. httpbin answered 403 Forbidden for redirects to 127.0.0.1 and to a value with a backslash, so they are proven by tests only.
 
-Redirect target, proven by tests only until the owner's manual run:
+Redirect target, still proven by tests only:
 
-- A real redirect warning in Discord, and how Discord shows it: no link, no preview and no ping. The tests prove what is sent.
-- The "Redirect" column in a real browser. The script tests read the file as text.
 - A real hijack cannot be provoked. The manual run changes rows by hand in a separate database, so it proves the chain from the worker to Discord but not the event itself.
 - How a real server sends hostile values. The tests send raw bytes from a local server on loopback.
 - Linux. The tests run on Windows, where `Uri.TryCreate("/a", ...)` does not behave as on Linux. They show that `/a` gives `SAME_HOST` here and that the form step does not use `Uri`. That it holds on Linux follows from how the code is built, but is not proven until the tests run there, for example in GitHub Actions in phase 4.
@@ -1133,7 +1131,7 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | Security headers with a grade, saved per check | Done | Proven by tests and by the owner's run against real websites in Chrome. Not tested: old rows in a real upgraded database, and whether a grade is fair for the values |
 | Certificate expiry saved per check, days left on the dashboard | Done | Proven by tests against a local server and by the owner's run against real websites in Chrome. Not confirmed manually: `Expired` on the screen, revocation, and the worker with Discord turned on. The cause of the timeouts in that run has not been established |
 | Warnings when security gets worse | Done | Proven by tests with a fake probe, a fake notifier and a stub. Manual test passed on 2026-11-09; see "Not run manually" |
-| Redirect target saved per check, with a warning when it moves to another domain (phase 3 task 4, not part of the MVP) | Built, manual run remaining | Proven by tests with a fake probe, a fake notifier, a stub and a local raw server. Real messages in Discord and the dashboard column wait for the owner's manual run; see "Not run manually" |
+| Redirect target saved per check, with a warning when it moves to another domain (phase 3 task 4, not part of the MVP) | Done | Proven by tests with a fake probe, a fake notifier, a stub and a local raw server. Manual test passed on 2026-11-10 for `OTHER_HOST`; `INTERNAL_TARGET` and `UNREADABLE` are proven by tests only. See "Not run manually" |
 | README | Missing | |
 | GitHub Actions | Missing | Waits for the owner's approval |
 
@@ -1415,7 +1413,7 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes early so that every new feature is visible in it at once. The MVP still covers phases 1 to 4; the dashboard is built earlier but is not part of the MVP. Each task is one branch, with a plan approved first.
 
-**Next step:** `feat/security-warnings` is done and merged. The owner runs the manual test of `feat/redirect-target`, then reviews and merges it. A single timeout still giving DOWN and UP messages is a task of its own later.
+**Next step:** `feat/security-warnings` is done and merged. The manual test of `feat/redirect-target` passed on 2026-11-10, and the owner reviews and merges it. The next task is of its own: a single timeout still gives DOWN and UP messages (`StatusChangeRule`).
 
 ### Phase 1: Stable foundation
 
@@ -1460,7 +1458,7 @@ The phase is built as four tasks, one branch each, in this order:
 | 1 | `feat/security-headers` | Read the five headers, give a grade, save it per check, show it in the API and the dashboard | Yes |
 | 2 | `feat/tls-certificate` | Read and save the certificate's expiry date, the first automated HTTPS test through the connector, days left in the dashboard | Yes |
 | 3 | `feat/security-warnings` | Warnings through `INotifier`: a certificate about to expire (configurable, default 14 days) and a header that has disappeared since the previous check | Yes |
-| 4 | `feat/redirect-target` | Save `Location` safely and warn when the host moves to another domain. Built and proven by tests, manual run remaining | No |
+| 4 | `feat/redirect-target` | Save `Location` safely and warn when the host moves to another domain. Built, proven by tests, and manual test passed on 2026-11-10 | No |
 
 Headers come first because they are already in the response the probe receives, so nothing about how connections are opened has to change. The certificate is the only task that changes the connection step. The warnings compare data that the first two tasks save.
 
