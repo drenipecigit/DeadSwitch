@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -60,17 +61,53 @@ public class DiscordNotifierTests
     {
         string content = await SendAndReadContentAsync(CreateChange("Shop", ExampleUrl));
 
-        Assert.Equal("DeadSwitch: `Shop` is DOWN (was UP). URL: `https://example.com/health`. Reason: HTTP 500. Time: 2026-11-05T07:15:53Z", content);
+        Assert.Equal("DeadSwitch: `Shop` is DOWN (" + FailedChecksText() + "). URL: `https://example.com/health`. Reason: HTTP 500. Time: 2026-11-05T07:15:53Z", content);
+    }
+
+    // Shown for every DOWN alarm, also for a new service, because an alarm now always means that
+    // several checks in a row have failed.
+    [Theory]
+    [InlineData(ServiceStatus.Up)]
+    [InlineData(null)]
+    public async Task DownMessageSaysHowManyChecksFailedInARow(ServiceStatus? previousStatus)
+    {
+        StatusChange change = new StatusChange(Guid.NewGuid(), "Shop", ExampleUrl, previousStatus, ServiceStatus.Down, CreateTime(), "HTTP 500");
+
+        string content = await SendAndReadContentAsync(change);
+
+        Assert.Contains("is DOWN (" + FailedChecksText() + ").", content);
     }
 
     [Fact]
-    public async Task MessageWithoutAPreviousStatusSaysFirstCheck()
+    public async Task DownMessageNeverSaysFirstCheck()
     {
         StatusChange change = new StatusChange(Guid.NewGuid(), "Shop", ExampleUrl, null, ServiceStatus.Down, CreateTime(), "HTTP 500");
 
         string content = await SendAndReadContentAsync(change);
 
-        Assert.Contains("is DOWN (first check)", content);
+        Assert.DoesNotContain("first check", content);
+    }
+
+    [Fact]
+    public async Task UpMessageStillSaysWasDown()
+    {
+        StatusChange change = new StatusChange(Guid.NewGuid(), "Shop", ExampleUrl, ServiceStatus.Down, ServiceStatus.Up, CreateTime(), null);
+
+        string content = await SendAndReadContentAsync(change);
+
+        Assert.Contains("is UP (was DOWN).", content);
+        Assert.DoesNotContain("failed checks", content);
+    }
+
+    // The rule never sends this. If it happens anyway, nothing is made up about an earlier status.
+    [Fact]
+    public async Task UpMessageWithoutAPreviousStatusHasNoBrackets()
+    {
+        StatusChange change = new StatusChange(Guid.NewGuid(), "Shop", ExampleUrl, null, ServiceStatus.Up, CreateTime(), null);
+
+        string content = await SendAndReadContentAsync(change);
+
+        Assert.Equal("DeadSwitch: `Shop` is UP. URL: `https://example.com/health`. Time: 2026-11-05T07:15:53Z", content);
     }
 
     [Fact]
@@ -272,6 +309,12 @@ public class DiscordNotifierTests
     private static StatusChange CreateChange(string name, string url)
     {
         return new StatusChange(Guid.NewGuid(), name, url, ServiceStatus.Up, ServiceStatus.Down, CreateTime(), "HTTP 500");
+    }
+
+    // Built from the constant, so these tests follow along if the number of checks is changed.
+    private static string FailedChecksText()
+    {
+        return DownConfirmationRule.FailedChecksBeforeDown.ToString(CultureInfo.InvariantCulture) + " failed checks in a row";
     }
 
     private static DateTimeOffset CreateTime()

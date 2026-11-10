@@ -37,17 +37,21 @@ internal sealed class DiscordMessage
         string status = ToText(change.NewStatus);
         string time = change.CheckedAt.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
 
-        string previous;
-        if (change.PreviousStatus == null)
+        // Built only from our own values: the constant and our status. Nothing here comes from the site.
+        // A DOWN alarm is always sent after several failed checks in a row, with or without an
+        // earlier status, so it says so instead of the earlier status.
+        string explanation = "";
+        if (change.NewStatus == ServiceStatus.Down)
         {
-            previous = "first check";
+            string count = DownConfirmationRule.FailedChecksBeforeDown.ToString(CultureInfo.InvariantCulture);
+            explanation = " (" + count + " failed checks in a row)";
         }
-        else
+        else if (change.PreviousStatus != null)
         {
-            previous = "was " + ToText(change.PreviousStatus.Value);
+            explanation = " (was " + ToText(change.PreviousStatus.Value) + ")";
         }
 
-        string content = "DeadSwitch: " + name + " is " + status + " (" + previous + "). URL: " + url + ".";
+        string content = "DeadSwitch: " + name + " is " + status + explanation + ". URL: " + url + ".";
 
         // FailureReason only ever holds fixed texts from the probe, so it needs no cleaning.
         if (change.FailureReason != null)

@@ -156,6 +156,7 @@ public class MonitoredServiceService
                 service.CurrentStatus = ServiceStatus.Unknown;
                 service.LastKnownStatus = null;
                 service.LastCheckedAt = null;
+                service.FailedChecksInARow = 0;
             }
 
             Apply(service, configuration);
@@ -280,26 +281,34 @@ public class MonitoredServiceService
             // Must be read before CurrentStatus is overwritten below.
             bool becameUnknown = result.Status == ServiceStatus.Unknown && service.CurrentStatus != ServiceStatus.Unknown;
 
+            // Saved with the check below, so the row of failed checks survives a restart. Inside the
+            // lock, so a manual check and the worker can never count at the same time.
+            service.FailedChecksInARow = DownConfirmationRule.NextFailedChecksInARow(service.FailedChecksInARow, result.Status);
+
+            // Null after a single failed check, or after Unknown. Then no alarm is sent, and what is
+            // already known stays as it is.
+            ServiceStatus? confirmedStatus = DownConfirmationRule.ConfirmedStatus(result.Status, service.FailedChecksInARow);
+
             // Must be decided before LastKnownStatus is overwritten below.
-            if (StatusChangeRule.ShouldNotify(service.LastKnownStatus, result.Status))
+            if (confirmedStatus != null && StatusChangeRule.ShouldNotify(service.LastKnownStatus, confirmedStatus.Value))
             {
                 statusChange = new StatusChange(
                     id,
                     service.Name,
                     service.Url,
                     service.LastKnownStatus,
-                    result.Status,
+                    confirmedStatus.Value,
                     checkedAt,
                     result.FailureReason);
             }
 
+            // Shows what this check saw, also when it is not confirmed yet. Only the alarm waits.
             service.CurrentStatus = record.Status;
             service.LastCheckedAt = checkedAt;
 
-            // Unknown says nothing about the service, so it must not replace what is already known.
-            if (result.Status != ServiceStatus.Unknown)
+            if (confirmedStatus != null)
             {
-                service.LastKnownStatus = result.Status;
+                service.LastKnownStatus = confirmedStatus.Value;
             }
 
             await _repository.SaveCheckAsync(service, record, ct);

@@ -24,11 +24,10 @@ public class NotificationFailureTests
         MonitoredService service = await app.RegisterServiceAsync(client, new ServiceConfiguration("Shop", "https://example.com"));
         app.Notifier.ExceptionToThrow = new NotificationFailedException(ExpectedFailureText);
 
-        app.Probe.Result = Down;
-        HttpResponseMessage response = await client.PostAsync($"/services/{service.Id}/check", null);
+        HttpResponseMessage response = await CheckTwiceAsDownAsync(app, client, service.Id);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        await AssertCheckIsSavedAsync(client, service.Id);
+        await AssertBothChecksAreSavedAsync(client, service.Id);
         Assert.True(app.Logs.Contains(LogLevel.Warning, ExpectedFailureText));
     }
 
@@ -42,11 +41,10 @@ public class NotificationFailureTests
         MonitoredService service = await app.RegisterServiceAsync(client, new ServiceConfiguration("Shop", "https://example.com"));
         app.Notifier.ExceptionToThrow = new InvalidOperationException(SecretText);
 
-        app.Probe.Result = Down;
-        HttpResponseMessage response = await client.PostAsync($"/services/{service.Id}/check", null);
+        HttpResponseMessage response = await CheckTwiceAsDownAsync(app, client, service.Id);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        await AssertCheckIsSavedAsync(client, service.Id);
+        await AssertBothChecksAreSavedAsync(client, service.Id);
         Assert.True(app.Logs.Contains(LogLevel.Error, nameof(InvalidOperationException)));
         app.Logs.AssertNothingContains(SecretText);
     }
@@ -62,19 +60,34 @@ public class NotificationFailureTests
         app.Notifier.ExceptionToThrow = new InvalidOperationException(SecretText);
         using MonitoringWorker worker = app.CreateWorker();
 
+        // Two passes, because a DOWN message is only sent at the second failed check in a row.
         app.Probe.Result = Down;
         await worker.RunPassAsync(CancellationToken.None);
+        app.Clock.Advance(TimeSpan.FromSeconds(61));
+        await worker.RunPassAsync(CancellationToken.None);
 
-        Assert.Equal(2, app.Probe.Calls);
-        await AssertCheckIsSavedAsync(client, first.Id);
-        await AssertCheckIsSavedAsync(client, second.Id);
+        Assert.Equal(4, app.Probe.Calls);
+        Assert.True(app.Logs.Contains(LogLevel.Error, nameof(InvalidOperationException)));
+        await AssertBothChecksAreSavedAsync(client, first.Id);
+        await AssertBothChecksAreSavedAsync(client, second.Id);
     }
 
-    private static async Task AssertCheckIsSavedAsync(HttpClient client, Guid id)
+    // Returns the answer to the second check, which is the one that tries to notify.
+    private static async Task<HttpResponseMessage> CheckTwiceAsDownAsync(TestApp app, HttpClient client, Guid id)
+    {
+        app.Probe.Result = Down;
+        HttpResponseMessage firstCheck = await client.PostAsync($"/services/{id}/check", null);
+        firstCheck.EnsureSuccessStatusCode();
+
+        return await client.PostAsync($"/services/{id}/check", null);
+    }
+
+    private static async Task AssertBothChecksAreSavedAsync(HttpClient client, Guid id)
     {
         List<CheckRecord>? history = await client.GetFromJsonAsync<List<CheckRecord>>($"/services/{id}/history", TestJson.Options);
-        CheckRecord record = Assert.Single(history!);
-        Assert.Equal(ServiceStatus.Down, record.Status);
+        Assert.Equal(2, history!.Count);
+        Assert.Equal(ServiceStatus.Down, history[0].Status);
+        Assert.Equal(ServiceStatus.Down, history[1].Status);
 
         MonitoredService? service = await client.GetFromJsonAsync<MonitoredService>($"/services/{id}", TestJson.Options);
         Assert.Equal(ServiceStatus.Down, service!.LastKnownStatus);

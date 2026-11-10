@@ -25,7 +25,7 @@ public class LastKnownStatusTests
     }
 
     [Fact]
-    public async Task CheckSavesUpAndDownAsLastKnownStatus()
+    public async Task CheckSavesUpAndConfirmedDownAsLastKnownStatus()
     {
         await using TestApp app = new TestApp();
         await app.MigrateAsync();
@@ -33,6 +33,10 @@ public class LastKnownStatusTests
         MonitoredService service = await app.RegisterServiceAsync(client, CreateConfiguration("https://example.com"));
 
         await CheckAsync(app, client, service.Id, Up);
+        Assert.Equal(ServiceStatus.Up, await ReadLastKnownStatusAsync(client, service.Id));
+
+        // One failed check is not confirmed yet, so the service is still known as up.
+        await CheckAsync(app, client, service.Id, Down);
         Assert.Equal(ServiceStatus.Up, await ReadLastKnownStatusAsync(client, service.Id));
 
         await CheckAsync(app, client, service.Id, Down);

@@ -57,7 +57,10 @@ public class DiscordConfigurationTests
         app.AssertDiscordClientUsesTheStub();
         MonitoredService service = await app.RegisterServiceAsync(client, new ServiceConfiguration("Shop", "https://example.com"));
 
+        // Two failed checks, because only the second one in a row tries to send a DOWN message.
         app.Probe.Result = new ProbeResult(ServiceStatus.Down, 500, 12, "HTTP 500");
+        HttpResponseMessage firstCheck = await client.PostAsync($"/services/{service.Id}/check", null);
+        firstCheck.EnsureSuccessStatusCode();
         HttpResponseMessage response = await client.PostAsync($"/services/{service.Id}/check", null);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);

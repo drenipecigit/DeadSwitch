@@ -46,6 +46,11 @@ public class DeadSwitchDbContext : DbContext
                 status => status.ToString()!.ToUpperInvariant(),
                 text => Enum.Parse<ServiceStatus>(text, ignoreCase: true));
 
+        // Rows that existed before the column start at 0: no failed checks are counted for them yet.
+        modelBuilder.Entity<MonitoredService>()
+            .Property(service => service.FailedChecksInARow)
+            .HasDefaultValue(0);
+
         modelBuilder.Entity<CheckRecord>()
             .Property(record => record.Status)
             .HasConversion(

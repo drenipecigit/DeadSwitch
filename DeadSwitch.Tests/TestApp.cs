@@ -61,13 +61,18 @@ internal sealed class TestApp : WebApplicationFactory<Program>
     }
 
     // The framework treats a bad request differently in Development and Production, so the tests
-    // of error responses run in both.
-    public TestApp(string environmentName)
+    // of error responses run in both. The unique name gives every test its own database.
+    public TestApp(string environmentName) : this(environmentName, "test-" + Guid.NewGuid())
+    {
+    }
+
+    // Two apps with the same database name share one database. A test can then start a second app
+    // and stop the first one, which is how a restart of the application looks to the database.
+    public TestApp(string environmentName, string databaseName)
     {
         _environmentName = environmentName;
 
-        // The unique name gives every test its own database.
-        _keeper = new SqliteConnection($"Data Source=test-{Guid.NewGuid()};Mode=Memory;Cache=Shared");
+        _keeper = new SqliteConnection($"Data Source={databaseName};Mode=Memory;Cache=Shared");
         _keeper.Open();
     }
 
@@ -190,6 +195,14 @@ internal sealed class TestApp : WebApplicationFactory<Program>
         // The ! is safe here: the API returned success, so the body contains a service.
         MonitoredService service = (await response.Content.ReadFromJsonAsync<MonitoredService>(TestJson.Options))!;
         return service;
+    }
+
+    // Read straight from the database, so a test does not depend on what the API chooses to show.
+    public async Task<MonitoredService> ReadSavedServiceAsync(Guid id)
+    {
+        await using AsyncServiceScope scope = Services.CreateAsyncScope();
+        DeadSwitchDbContext db = scope.ServiceProvider.GetRequiredService<DeadSwitchDbContext>();
+        return await db.MonitoredServices.AsNoTracking().SingleAsync(saved => saved.Id == id);
     }
 
     public MonitoringWorker CreateWorker()

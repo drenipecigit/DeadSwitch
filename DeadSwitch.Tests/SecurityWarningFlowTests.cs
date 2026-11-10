@@ -137,7 +137,7 @@ public class SecurityWarningFlowTests
 
     // The pattern from the owner's run against a good site: 1 timeout of 34.
     [Fact]
-    public async Task OneTimeoutIn34ChecksGivesNoSecurityWarningButStillStatusMessages()
+    public async Task OneTimeoutIn34ChecksGivesNoSecurityWarningAndNoStatusMessage()
     {
         await using SecurityWarningScenario scenario = await SecurityWarningScenario.StartAsync();
         const int TimeoutAtCheck = 17;
@@ -157,8 +157,8 @@ public class SecurityWarningFlowTests
 
         Assert.Empty(scenario.GetWarnings());
 
-        // Not solved by this feature, and written down here so that it is not forgotten: DOWN, then UP.
-        Assert.Equal(2, scenario.App.Notifier.GetChanges().Count);
+        // A single timeout is not confirmed as DOWN, so no DOWN and no UP message is sent.
+        Assert.Empty(scenario.App.Notifier.GetChanges());
     }
 
     [Fact]
@@ -344,6 +344,9 @@ public class SecurityWarningFlowTests
     {
         await using SecurityWarningScenario scenario = await SecurityWarningScenario.StartAsync();
         await scenario.CheckAsync(TestProbeResults.Assessed(Nothing));
+
+        // Two timeouts, because one is not enough for a DOWN message.
+        await scenario.CheckAsync(TestProbeResults.Timeout());
         await scenario.CheckAsync(TestProbeResults.Timeout());
 
         await scenario.CheckAsync(TestProbeResults.Assessed(Frame));

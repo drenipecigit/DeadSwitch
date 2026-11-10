@@ -87,8 +87,7 @@ public class WebhookSecrecyTests
         using HttpClient client = app.CreateClient();
         MonitoredService service = await app.RegisterServiceAsync(client, new ServiceConfiguration("@everyone", "https://example.com"));
 
-        app.Probe.Result = Down;
-        HttpResponseMessage response = await client.PostAsync($"/services/{service.Id}/check", null);
+        HttpResponseMessage response = await CheckTwiceAsDownAsync(app, client, service.Id);
         response.EnsureSuccessStatusCode();
 
         using JsonDocument document = JsonDocument.Parse(stub.LastBody);
@@ -107,8 +106,17 @@ public class WebhookSecrecyTests
     private static async Task<HttpResponseMessage> CheckNewServiceAsync(TestApp app, HttpClient client)
     {
         MonitoredService service = await app.RegisterServiceAsync(client, new ServiceConfiguration("Shop", "https://example.com"));
+        return await CheckTwiceAsDownAsync(app, client, service.Id);
+    }
+
+    // A DOWN message is only sent at the second failed check in a row. Returns the answer to that check.
+    private static async Task<HttpResponseMessage> CheckTwiceAsDownAsync(TestApp app, HttpClient client, Guid id)
+    {
         app.Probe.Result = Down;
-        return await client.PostAsync($"/services/{service.Id}/check", null);
+        HttpResponseMessage firstCheck = await client.PostAsync($"/services/{id}/check", null);
+        firstCheck.EnsureSuccessStatusCode();
+
+        return await client.PostAsync($"/services/{id}/check", null);
     }
 
     private static async Task AssertAddressIsNotShownAsync(TestApp app, HttpResponseMessage response)

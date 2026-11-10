@@ -189,6 +189,29 @@ public class MigrationTests
         Assert.Null(record.RedirectTargetHost);
     }
 
+    [Fact]
+    public async Task FailedChecksMigrationGivesZeroToOldRows()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await using AsyncServiceScope scope = app.Services.CreateAsyncScope();
+        DeadSwitchDbContext db = scope.ServiceProvider.GetRequiredService<DeadSwitchDbContext>();
+        IMigrator migrator = db.GetService<IMigrator>();
+
+        await migrator.MigrateAsync("20261109134809_AddRedirectTargetToCheckRecords");
+        Guid serviceId = Guid.NewGuid();
+        string url = "https://example.com";
+        string up = "UP";
+        await db.Database.ExecuteSqlInterpolatedAsync($"INSERT INTO MonitoredServices (Id, Name, Url, CurrentStatus, LastKnownStatus) VALUES ({serviceId}, {"Old"}, {url}, {up}, {up})");
+
+        await db.Database.MigrateAsync();
+
+        MonitoredService service = await db.MonitoredServices.SingleAsync();
+        Assert.Equal(serviceId, service.Id);
+        Assert.Equal(ServiceStatus.Up, service.LastKnownStatus);
+        Assert.Equal(0, service.FailedChecksInARow);
+    }
+
     // Fails if the model was changed without a matching migration.
     [Fact]
     public async Task ModelMatchesTheMigrations()

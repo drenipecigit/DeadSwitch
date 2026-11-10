@@ -88,13 +88,18 @@ public class CertificateStorageTests
         _realProbe = new HttpHealthProbe(notTrusting, recorder);
         string rejectedAnswer = await CheckAndReadTextAsync(client, service.Id);
 
+        // A second rejected check, because only the second failed check in a row gives a message.
+        string secondRejectedAnswer = await CheckAndReadTextAsync(client, service.Id);
+
         string history = await client.GetStringAsync($"/services/{service.Id}/history");
         string overview = await client.GetStringAsync("/services/overview");
 
         Assert.Contains("\"UP\"", validAnswer);
         Assert.Contains("\"DOWN\"", rejectedAnswer);
+        Assert.Contains("\"DOWN\"", secondRejectedAnswer);
         Assert.DoesNotContain(HostileMarker, validAnswer);
         Assert.DoesNotContain(HostileMarker, rejectedAnswer);
+        Assert.DoesNotContain(HostileMarker, secondRejectedAnswer);
         Assert.DoesNotContain(HostileMarker, history);
         Assert.DoesNotContain(HostileMarker, overview);
         app.Logs.AssertNothingContains(HostileMarker);

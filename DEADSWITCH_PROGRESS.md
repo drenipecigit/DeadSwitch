@@ -130,6 +130,7 @@ dotnet run --project DeadSwitch.Api --launch-profile http -- --Discord:WebhookUr
 | `AddSecurityHeadersToCheckRecords` | Adds the nullable text columns `SecurityGrade`, `MissingSecurityHeaders` and `SecurityNotAssessedReason` to `CheckRecords`. Existing rows get NULL, which means that nothing was assessed. No data is rewritten |
 | `AddCertificateToCheckRecords` | Adds the nullable columns `CertificateNotAfterUtc` and `CertificateNotAssessedReason` to `CheckRecords`. Existing rows get NULL, which means that no certificate was assessed. No data is rewritten |
 | `AddRedirectTargetToCheckRecords` | Adds the nullable text columns `RedirectFinding` and `RedirectTargetHost` (max 253) to `CheckRecords`. Existing rows get NULL, which means no finding: `Location` was never saved, so nothing can be filled in afterwards. No table is rebuilt and no data is rewritten. As a result, the first check after the upgrade never gives a redirect warning. SQLite does not enforce the length, so the limit of 253 is set in the code and `HasMaxLength` is documentation only. `Up` holds only the two `AddColumn` calls. Proven by `RedirectMigrationKeepsOldRecordsWithoutAFinding` |
+| `AddFailedChecksInARowToMonitoredService` | Adds the column `FailedChecksInARow` (INTEGER, NOT NULL, default 0) to `MonitoredServices`. Existing rows get 0, which means that no failed checks are counted for them yet. `Up` holds only the `AddColumn` call. No table is rebuilt and no data is rewritten. A service whose `LastKnownStatus` is already DOWN does not notify again. Proven by `FailedChecksMigrationGivesZeroToOldRows` |
 
 The application does not run migrations at startup. Run `dotnet ef database update` when setting up a database, and after pulling a new migration: without it, reading a service fails because the column is missing. `MakeCurrentStatusRequired` has run in the tests and from empty against a separate database file, but not against the local development database. Run the command there as well.
 
@@ -141,11 +142,15 @@ Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, s
 
 ## Latest verified result
 
-Date: 2026-11-10, on `feat/redirect-target`.
+Date: 2026-11-10, on `fix/single-timeout`.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
-- `dotnet test DeadSwitch.slnx`: 1434 passed, 0 failed, 0 skipped, on the final code. Run on Windows 10.0.26200, `win-x64`, SDK 10.0.301. **Nothing has been run on Linux.**
+- `dotnet test DeadSwitch.slnx`: 1473 passed, 0 failed, 0 skipped, on the final code. Run on Windows 10.0.26200, `win-x64`, SDK 10.0.301. **Nothing has been run on Linux.**
 - `dotnet ef migrations has-pending-model-changes`: no changes.
+- The DOWN confirmation adds 40 tests: 14 test `DownConfirmationRule` directly, 18 the whole flow through the API, the worker and the database with a fake probe and a fake notifier, 5 the real Discord message, 2 that POST and PUT cannot set the count or the status, and 1 the migration. 30 older test methods were changed so that they make two failed checks, and `MessageWithoutAPreviousStatusSaysFirstCheck` was replaced; see "Red runs and mutation check of the DOWN confirmation". No automated test reaches a real website or Discord.
+
+On 2026-11-10 on `feat/redirect-target`, before the DOWN confirmation, 1434 tests passed.
+
 - The redirect target has eight test classes of its own, 204 tests: 107 test the parser as text with no network, 19 the reader with no network, 14 the real probe with a stand-in for the network, 11 the real handler against a local raw server on loopback, 9 the storage through the API, 26 the whole flow through the API and the database with a fake probe and a fake notifier, 11 the real notifier with a stub, and 7 the domain rule. Rows in existing classes cover the migration, the overview fields and the dashboard's files. No automated test reaches a real website or Discord.
 
 The numbers below are from 2026-11-09, when 1221 tests passed, and are kept for the earlier features.
@@ -158,6 +163,43 @@ The numbers below are from 2026-11-09, when 1221 tests passed, and are kept for 
 - 153 come from phase 2: 60 classify webhook addresses, 12 test the rule directly, 29 test the real notifier with a stub handler, 2 test the registered handler against a local server, 13 run the real registration with a stub handler, 36 use the API, the worker or the migrations with a fake notifier, and 1 reads the settings files.
 - Without the 68 tests that carry the trait `NameLookupWithoutConnector`: 1153 passed.
 - No test sends anything to Discord. Real messages are confirmed by the owner's run; see "Manual run".
+
+### Red runs and mutation check of the DOWN confirmation
+
+The red run was made against a skeleton: the column, the migration and `DownConfirmationRule` were in place, but the rule behaved like the old code and `CheckAsync` and `DiscordMessage` were unchanged. 24 of 1470 tests failed, all of them new or changed tests, and all on assertions: no `SqliteException`, `NullReferenceException` or `DbUpdateException`. All 1432 unchanged older tests passed.
+
+The new tests that passed cannot be red against the old code, because the old code gives the same answer there: the constant, table rows where old and new agree, two timeouts in a row giving one message, Up after a confirmed Down, Unknown between two failures, the unchanged UP text, the migration, and the two tests that POST and PUT cannot set the count or the status. The last two were green because `RegisterServiceRequest` and `UpdateServiceRequest` already hold only the five configuration fields. All of these are proven by the mutations below.
+
+`UpBetweenTwoTimeoutsStartsTheCountOver` was added after the mutation run, because "Up does not start the count over" was only noticed by the table and the stored count. Its red run is the rows "Up does not start the count over, again" and "The alarm follows the raw status" below.
+
+Older test methods changed, because a single DOWN no longer gives a message: 12 in `NotificationBehaviourTests` (most now through `ConfirmDownAsync`), 4 in `NotificationOrderTests`, 3 in `NotificationFailureTests`, 5 in `WebhookSecrecyTests`, 1 in `LastKnownStatusTests`, 1 in `CertificateStorageTests`, 2 in `SecurityWarningFlowTests`, 1 in `DiscordConfigurationTests` and 1 in `DiscordNotifierTests`. `OneTimeoutIn34Checks...` now expects no status message, which is the case this change was made for. Four of these tests still passed with a single DOWN but no longer tested what their name says: no save, a cancelled check, notifications turned off, and a new URL forgetting the old status. They were changed so that the second failed check is the one that would notify.
+
+The code was broken on purpose, one change at a time, running all tests and restoring the file from a backup. The changes were never committed, and checksums of all files were compared before and after. All of them ran against a fake probe and a fake notifier, or `127.0.0.1`.
+
+| Change | Failing tests |
+|---|---|
+| The threshold is 1 | 23 |
+| The threshold is 3 | 34 |
+| `>=` becomes `>` | 33 |
+| Unknown starts the count over | 3 |
+| Unknown counts as a failed check | 3 |
+| Up does not start the count over | 2 |
+| Up does not start the count over, again, with `UpBetweenTwoTimeoutsStartsTheCountOver` | 3 |
+| Unknown with a count of 2 is confirmed as DOWN | 1 |
+| `LastKnownStatus` gets the raw status | 40 |
+| The alarm follows the raw status, as before | 36 |
+| A new URL keeps the count | 1 |
+| The count is kept in a local variable and not saved on the service | 38 |
+| `HasDefaultValue(0)` removed | 529, because the model no longer matches the migrations |
+| The migration gives old rows 7 | 7 |
+| The Discord message says "first check" | 4 |
+| The message has a fixed "2", and the threshold is 3 | 37, which is 3 more than the threshold alone: the Discord tests built from the constant |
+| The UP message also says "failed checks in a row" | 3 |
+| POST and PUT take the count and both statuses from the body | 4, of which 2 in `ServiceInputProtectionTests` and 2 older ones in `LastKnownStatusTests` |
+
+"The migration gives old rows 7" also fails tests for new services: with `HasDefaultValue(0)` EF Core does not send the value 0, so the database default decides. This is why the migration's default and the model's default must agree.
+
+The first run of the `LastKnownStatus` row was not valid: the file has LF line endings, the pattern looked for CRLF, and the check that the change had been made was fooled because `sed` adds a final line break. The check was fixed, proven with a change that cannot match, and the row was run again.
 
 ### Readability changes without new behaviour
 
@@ -896,7 +938,7 @@ Done by the owner on 2026-11-05 against a real Discord channel, on the real serv
 - The first check was UP: no message.
 - `timeoutSeconds` 1 gave DOWN (`Check timed out`): exactly one message, `is DOWN (was UP)`.
 - Another check was DOWN: no new message.
-- The new faulty URL `https://does-not-exist.invalid/` gave DOWN: exactly one message, `is DOWN (first check)`.
+- The new faulty URL `https://does-not-exist.invalid/` gave DOWN: exactly one message, `is DOWN (first check)`. This was the rule and the text at the time; since `fix/single-timeout` the message comes at the second failed check and says `(2 failed checks in a row)`.
 - In Discord: no ping, `@everyone` and `@here` were shown as inline code, `[click](...)` was no link, `?secret=abc` was not shown, and the times ended with `Z`.
 - The log held `Discord notification sent` and no match for `api/webhooks`.
 
@@ -988,6 +1030,8 @@ Security warnings, still proven by tests only:
 Redirect warning: manual test passed on 2026-11-10 with the worker, real Discord and https://httpbin.org/redirect-to to example.com. The first check gave OTHER_HOST with UP and no message. The baseline was set to NoRedirect by hand in a separate database twice: first by mistake while the app was running, then with the app stopped. Each change gave exactly one warning, the second one after a real restart. Silent at the following checks and after one more restart. The dashboard showed example.com as plain text with no console errors. The marker zqx was found only in the service's own Url: not in the log, not in other columns and not in Discord. No webhook address in the log. Two sends, one per change, and no failed sends. No certificate warning came, as httpbin.org had 85 days left. The ordinary database was untouched. Whether example.com was a link, showed a preview or pinged anyone in Discord was not checked explicitly.
 
 Not run manually: INTERNAL_TARGET and UNREADABLE. httpbin answered 403 Forbidden for redirects to 127.0.0.1 and to a value with a backslash, so they are proven by tests only.
+
+DOWN confirmation (`fix/single-timeout`): the manual test has not been run yet. When it is run, it can only show that a really faulty URL gives one message at the second check and none at the first or third. That a single real timeout followed by UP gives no message cannot be provoked by hand: the SSRF protection blocks a slow local server, and no public server is under our control. It is proven by tests with a fake probe only, as is DOWN to UP on the same URL and a real restart between two failed checks.
 
 Redirect target, still proven by tests only:
 
@@ -1124,7 +1168,7 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | History endpoint | Done | Proven by tests, with `Z` on every time, and confirmed by a manual run after a real check |
 | SSRF protection | Done | Proven by tests against a local server, over HTTP and HTTPS |
 | Tests for all of the above | Done for phase 1 | The limits are listed under "Not proven by a test" and "Never run so far" |
-| Notification on UP to DOWN and DOWN to UP | Done | Both directions are proven by tests with a fake notifier and a stub. A manual run confirms real messages for UP to DOWN and for DOWN on a new URL. DOWN to UP has not been run manually |
+| Notification on UP to DOWN and DOWN to UP | Done | Both directions are proven by tests with a fake notifier and a stub. Since `fix/single-timeout`, DOWN needs 2 failed checks in a row; this is proven by tests only, and the manual test of it has not been run yet. The earlier manual run confirms real messages for UP to DOWN and for DOWN on a new URL with the old rule. DOWN to UP has not been run manually |
 | `INotifier` with a Discord webhook | Done | Proven by tests, and confirmed by a manual run against a real channel. A wrong token from Discord and notifications turned off have not been run manually with a real send |
 | Webhook address outside git | Done | Proven by tests of the settings files and the log. A manual run confirms the secret is read, and that the log holds no address after a real send |
 | Dashboard (phase 5, not part of the MVP) | Done | The server side is proven by tests and a run against the real server, and the page by the owner's run in Chrome. Step D (`eval`) and the visible failure message are not confirmed on the screen |
@@ -1137,17 +1181,29 @@ Dependency injection lifetimes were reviewed by reading the code only.
 
 ## Notification rules
 
-`StatusChangeRule` compares `LastKnownStatus` with the new status. Worker and manual checks share `MonitoredServiceService.CheckAsync`, so they behave the same.
+A single failed check is not enough for a DOWN message. A single timeout happens even when nothing is wrong, and it used to give one DOWN and one UP message for a problem that never existed. `DownConfirmationRule` therefore turns the status of a check into a confirmed status first:
 
-| Last known | New | Notification | Why |
+| Check | `FailedChecksInARow` afterwards | Confirmed status |
+|---|---|---|
+| UP | 0 | UP, at once |
+| DOWN: timeout, connection, DNS or TLS failure, HTTP 4xx or 5xx | One more | DOWN when the count is 2 (`FailedChecksBeforeDown`) or more, otherwise nothing |
+| UNKNOWN | Unchanged: no request was sent, so the row neither grows nor starts over | Nothing |
+
+The count is a column on `MonitoredServices` and is saved with the check, inside the service's lock. It therefore survives a restart, and a manual check and the worker share it. A new URL sets it to 0. Only the message waits: the check record and `CurrentStatus` show DOWN at once, while `LastKnownStatus` is only changed by a confirmed status.
+
+`StatusChangeRule` then compares `LastKnownStatus` with the confirmed status, and is not called when nothing is confirmed. Worker and manual checks share `MonitoredServiceService.CheckAsync`, so they behave the same.
+
+| Last known | Confirmed | Notification | Why |
 |---|---|---|---|
 | UP | DOWN | Yes | |
 | DOWN | UP | Yes | |
 | UP or DOWN | The same | No | Nothing changed |
-| Any | UNKNOWN | No | No request was sent, so nothing was learned. A change to UNKNOWN is logged as a warning |
-| Nothing: a new service or a new URL | DOWN | Yes | A misspelled URL that is down from its first check would otherwise never give an alarm |
+| Any | Nothing: a single failed check, or UNKNOWN | No | Not confirmed. A change to UNKNOWN is logged as a warning |
+| Nothing: a new service or a new URL | DOWN | Yes | A misspelled URL that is down from its first checks would otherwise never give an alarm |
 | Nothing: a new service or a new URL | UP | No | Nothing to warn about |
 | Nothing: a new service or a new URL | UNKNOWN | No | The status stays empty |
+
+The Discord message for DOWN says `is DOWN (2 failed checks in a row)`, also for a new service. The number comes from `FailedChecksBeforeDown`, and the text holds only that constant and our own status, never anything from the site. It is always true: the message is only sent when the count reaches exactly 2, because `LastKnownStatus` then becomes DOWN and later failed checks change nothing. The UP message still says `(was DOWN)`. The text `first check` is gone.
 
 ## Security warning rules
 
@@ -1227,6 +1283,10 @@ Check records saved before this rule keep their old status: an earlier 3xx stays
 - The worker reads the service list once per second, reads every enabled service once per pass, and reads a service that is due once more.
 - A manual check gets 409 while the worker really is checking the same service, which is intended. A very short window also remains: a service that was due at the first read but not at the second holds the lock for a moment.
 - History is never cleaned up and grows without limit.
+- A DOWN message comes one interval later than before: the default is 60 seconds, and with the highest interval it is a whole day.
+- A service that is DOWN and UP every other check never gives a DOWN message, because every UP starts the count over. This is a deliberate choice.
+- The cause of the timeouts seen in the TLS run is still unknown. The DOWN confirmation hides the false alarms but does not explain them.
+- `failedChecksInARow` is shown in the answers from `/services`, because they return the entity. It cannot be set through `POST` or `PUT`; see "Security notes".
 - `SocketsHttpHandler.ConnectTimeout` is 10 seconds, even when `TimeoutSeconds` is higher. One address that never answers can use all of it before the next address is tried.
 - A host name longer than 255 characters passes `UrlSafety` and only fails at the DNS step, which gives DOWN. It should be rejected earlier.
 - `POST` ignores fields it does not know, so a misspelled `"isEnable": false` gives an enabled service. `PUT` catches this, because the real field is then missing.
@@ -1293,6 +1353,8 @@ These parts do not yet follow the project's plain style, on purpose:
 - `CrossSiteRequests` has two checks that overlap on purpose: not every browser sends `Sec-Fetch-Site` to `localhost`, and the protection must not depend on one header.
 
 ## Security notes
+
+Mass assignment: `POST /services` and `PUT /services/{id}` read `RegisterServiceRequest` and `UpdateServiceRequest`, which hold only `Name`, `Url`, `IntervalSeconds`, `TimeoutSeconds` and `IsEnabled`. A client that sends `failedChecksInARow`, `currentStatus` or `lastKnownStatus` cannot change them, because those values are only set by a check. Proven by `ServiceInputProtectionTests`, which read the database directly, and by the mutation that lets the requests carry the three values.
 
 Proven by tests against a local server:
 - `PublicInternetConnector` resolves the host, rejects it if any address is non-public, then connects directly to a validated IP. This is the protection against DNS rebinding.
@@ -1431,6 +1493,7 @@ The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes ea
 Built on `feat/discord-notifications` and confirmed by the owner's manual run, except for the parts listed under "Not run manually":
 
 - Notify on a status change, UP to DOWN and DOWN to UP, never on every check. See "Notification rules".
+- DOWN is only notified after 2 failed checks in a row, so a single timeout gives no messages (`fix/single-timeout`, proven by tests; the manual test is still to be run).
 - First channel: a Discord webhook, behind an `INotifier` interface in Application, so that more channels can be added without touching the core logic.
 - The webhook URL is a secret. It belongs in user secrets or environment variables, never in `appsettings.json` or git.
 - Tests use a fake notifier or a stub handler and make no real calls.

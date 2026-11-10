@@ -25,7 +25,7 @@ public class NotificationBehaviourTests
         MonitoredService service = await RegisterAsync(app, client);
 
         await PostCheckAsync(app, client, service.Id, Up);
-        await PostCheckAsync(app, client, service.Id, Down);
+        await ConfirmDownAsync(app, client, service.Id);
 
         StatusChange change = Assert.Single(app.Notifier.GetChanges());
         Assert.Equal(service.Id, change.ServiceId);
@@ -50,6 +50,9 @@ public class NotificationBehaviourTests
         app.Probe.Result = Down;
         HttpResponseMessage secondCheck = await client.GetAsync($"/services/{service.Id}/check");
         secondCheck.EnsureSuccessStatusCode();
+        Assert.Empty(app.Notifier.GetChanges());
+        HttpResponseMessage thirdCheck = await client.GetAsync($"/services/{service.Id}/check");
+        thirdCheck.EnsureSuccessStatusCode();
 
         StatusChange change = Assert.Single(app.Notifier.GetChanges());
         Assert.Equal(ServiceStatus.Up, change.PreviousStatus);
@@ -70,6 +73,10 @@ public class NotificationBehaviourTests
 
         app.Clock.Advance(TimeSpan.FromSeconds(11));
         app.Probe.Result = Down;
+        await worker.RunPassAsync(CancellationToken.None);
+        Assert.Empty(app.Notifier.GetChanges());
+
+        app.Clock.Advance(TimeSpan.FromSeconds(11));
         await worker.RunPassAsync(CancellationToken.None);
 
         StatusChange change = Assert.Single(app.Notifier.GetChanges());
@@ -103,7 +110,7 @@ public class NotificationBehaviourTests
         using HttpClient client = app.CreateClient();
         MonitoredService service = await RegisterAsync(app, client);
 
-        await PostCheckAsync(app, client, service.Id, Down);
+        await ConfirmDownAsync(app, client, service.Id);
         await PostCheckAsync(app, client, service.Id, Up);
 
         List<StatusChange> changes = app.Notifier.GetChanges();
@@ -135,7 +142,7 @@ public class NotificationBehaviourTests
         using HttpClient client = app.CreateClient();
         MonitoredService service = await RegisterAsync(app, client);
 
-        await PostCheckAsync(app, client, service.Id, Down);
+        await ConfirmDownAsync(app, client, service.Id);
         await PostCheckAsync(app, client, service.Id, Down);
 
         StatusChange change = Assert.Single(app.Notifier.GetChanges());
@@ -168,7 +175,7 @@ public class NotificationBehaviourTests
     }
 
     [Fact]
-    public async Task NewFaultyUrlGivesDownNotificationAtOnce()
+    public async Task NewFaultyUrlGivesADownNotificationWithoutAnOldStatus()
     {
         await using TestApp app = await CreateAppAsync();
         using HttpClient client = app.CreateClient();
@@ -176,7 +183,7 @@ public class NotificationBehaviourTests
         await PostCheckAsync(app, client, service.Id, Up);
 
         await ChangeUrlAsync(client, service.Id, SecondUrl);
-        await PostCheckAsync(app, client, service.Id, Down);
+        await ConfirmDownAsync(app, client, service.Id);
 
         StatusChange change = Assert.Single(app.Notifier.GetChanges());
         Assert.Null(change.PreviousStatus);
@@ -190,7 +197,7 @@ public class NotificationBehaviourTests
         await using TestApp app = await CreateAppAsync();
         using HttpClient client = app.CreateClient();
         MonitoredService service = await RegisterAsync(app, client);
-        await PostCheckAsync(app, client, service.Id, Down);
+        await ConfirmDownAsync(app, client, service.Id);
         int notificationsBefore = app.Notifier.GetChanges().Count;
 
         await ChangeUrlAsync(client, service.Id, SecondUrl);
@@ -213,7 +220,7 @@ public class NotificationBehaviourTests
         await PostCheckAsync(app, client, service.Id, Up);
         Assert.Empty(app.Notifier.GetChanges());
 
-        await PostCheckAsync(app, client, service.Id, Down);
+        await ConfirmDownAsync(app, client, service.Id);
         StatusChange change = Assert.Single(app.Notifier.GetChanges());
         Assert.Equal(ServiceStatus.Up, change.PreviousStatus);
         Assert.Equal("Renamed", change.ServiceName);
@@ -230,7 +237,7 @@ public class NotificationBehaviourTests
         await PostCheckAsync(app, client, service.Id, Unknown);
         Assert.Empty(app.Notifier.GetChanges());
 
-        await PostCheckAsync(app, client, service.Id, Down);
+        await ConfirmDownAsync(app, client, service.Id);
 
         StatusChange change = Assert.Single(app.Notifier.GetChanges());
         Assert.Equal(ServiceStatus.Up, change.PreviousStatus);
@@ -258,7 +265,7 @@ public class NotificationBehaviourTests
         using HttpClient client = app.CreateClient();
         MonitoredService service = await RegisterAsync(app, client);
 
-        await PostCheckAsync(app, client, service.Id, Down);
+        await ConfirmDownAsync(app, client, service.Id);
         await PostCheckAsync(app, client, service.Id, Unknown);
         await PostCheckAsync(app, client, service.Id, Down);
 
@@ -272,7 +279,7 @@ public class NotificationBehaviourTests
         using HttpClient client = app.CreateClient();
         MonitoredService service = await RegisterAsync(app, client);
 
-        await PostCheckAsync(app, client, service.Id, Down);
+        await ConfirmDownAsync(app, client, service.Id);
         await PostCheckAsync(app, client, service.Id, Unknown);
         await PostCheckAsync(app, client, service.Id, Up);
 
@@ -290,7 +297,7 @@ public class NotificationBehaviourTests
         MonitoredService service = await RegisterAsync(app, client);
 
         await PostCheckAsync(app, client, service.Id, Unknown);
-        await PostCheckAsync(app, client, service.Id, Down);
+        await ConfirmDownAsync(app, client, service.Id);
 
         StatusChange change = Assert.Single(app.Notifier.GetChanges());
         Assert.Null(change.PreviousStatus);
@@ -343,6 +350,13 @@ public class NotificationBehaviourTests
         app.Probe.Result = result;
         HttpResponseMessage response = await client.PostAsync($"/services/{id}/check", null);
         response.EnsureSuccessStatusCode();
+    }
+
+    // DOWN is only confirmed, and a message only sent, at the second failed check in a row.
+    private static async Task ConfirmDownAsync(TestApp app, HttpClient client, Guid id)
+    {
+        await PostCheckAsync(app, client, id, Down);
+        await PostCheckAsync(app, client, id, Down);
     }
 
     private static async Task ChangeUrlAsync(HttpClient client, Guid id, string url)

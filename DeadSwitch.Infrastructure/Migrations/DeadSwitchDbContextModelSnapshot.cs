@@ -87,6 +87,11 @@ namespace DeadSwitch.Infrastructure.Migrations
                         .HasColumnType("TEXT")
                         .HasDefaultValue("UNKNOWN");
 
+                    b.Property<int>("FailedChecksInARow")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(0);
+
                     b.Property<int>("IntervalSeconds")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER")

@@ -31,12 +31,12 @@ public class NotificationOrderTests
         }
 
         app.Notifier.RunWhenNotified = CountSavedChecks;
-        app.Probe.Result = Down;
+        await CheckOnceAsDownAsync(app, client, service.Id);
         HttpResponseMessage response = await client.PostAsync($"/services/{service.Id}/check", null);
         response.EnsureSuccessStatusCode();
 
         Assert.Single(app.Notifier.GetChanges());
-        Assert.Equal(1, savedChecksWhenNotified);
+        Assert.Equal(2, savedChecksWhenNotified);
     }
 
     // A slow channel must not hold the lock, or it would make updates wait and manual checks get 409.
@@ -57,7 +57,7 @@ public class NotificationOrderTests
         }
 
         app.Notifier.RunWhenNotified = CountLocks;
-        app.Probe.Result = Down;
+        await CheckOnceAsDownAsync(app, client, service.Id);
         HttpResponseMessage response = await client.PostAsync($"/services/{service.Id}/check", null);
         response.EnsureSuccessStatusCode();
 
@@ -73,8 +73,9 @@ public class NotificationOrderTests
         using HttpClient client = app.CreateClient();
         MonitoredService service = await app.RegisterServiceAsync(client, new ServiceConfiguration("Shop", "https://example.com"));
 
+        // Without the save failing, the second failed check would notify.
+        await CheckOnceAsDownAsync(app, client, service.Id);
         app.RepositoryControl.FailSaveCheck = true;
-        app.Probe.Result = Down;
         HttpResponseMessage response = await client.PostAsync($"/services/{service.Id}/check", null);
 
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
@@ -91,6 +92,9 @@ public class NotificationOrderTests
         app.Probe.Result = Up;
         HttpResponseMessage firstCheck = await client.PostAsync($"/services/{service.Id}/check", null);
         firstCheck.EnsureSuccessStatusCode();
+
+        // Without the cancellation, the second failed check would notify.
+        await CheckOnceAsDownAsync(app, client, service.Id);
 
         using CancellationTokenSource cancellation = new CancellationTokenSource();
 
@@ -111,5 +115,15 @@ public class NotificationOrderTests
         Assert.Empty(app.Notifier.GetChanges());
         MonitoredService? found = await client.GetFromJsonAsync<MonitoredService>($"/services/{service.Id}", TestJson.Options);
         Assert.Equal(ServiceStatus.Up, found!.LastKnownStatus);
+    }
+
+    // A DOWN message needs two failed checks in a row, so the tests above make the first one here.
+    // The probe still answers DOWN afterwards, so the next check is the second failed check.
+    private static async Task CheckOnceAsDownAsync(TestApp app, HttpClient client, Guid id)
+    {
+        app.Probe.Result = Down;
+        HttpResponseMessage response = await client.PostAsync($"/services/{id}/check", null);
+        response.EnsureSuccessStatusCode();
+        Assert.Empty(app.Notifier.GetChanges());
     }
 }
