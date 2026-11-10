@@ -10,9 +10,9 @@ DeadSwitch is a personal uptime monitor. The backend is **not finished**: see th
 
 | Project | Contains | References |
 |---|---|---|
-| `DeadSwitch.Domain` | `MonitoredService`, `CheckRecord`, `ServiceStatus`, `StatusChangeRule`, `SecurityHeaderRule`, `CertificateExpiryRule`, `CertificateWarningRule`, `CertificateFinding`, `CertificateReasons` | nothing |
-| `DeadSwitch.Application` | `MonitoredServiceService`, `ServiceOverview`, `ServiceConfiguration`, `UrlSafety`, `ServiceLocks`, `ServiceValidationException`, `CheckInProgressException`, `NotificationFailedException`, `StatusChange`, `SecurityHeaderCheck`, `CertificateCheck`, `SecurityWarning`, `SecurityWarningFinder`, `SecurityWarningSettings`, interfaces including `INotifier` | Domain |
-| `DeadSwitch.Infrastructure` | `DeadSwitchDbContext`, repository, `HttpHealthProbe`, `SecurityHeaderReader`, `TlsHandshakeRecorder`, `TlsHandshake`, `ProtectedHttpHandler`, `PublicInternetConnector`, `DestinationBlockedException`, `DiscordNotifier`, `DiscordMessage`, `DiscordOptions`, `DiscordWebhookUrl`, migrations | Application, Domain |
+| `DeadSwitch.Domain` | `MonitoredService`, `CheckRecord`, `ServiceStatus`, `StatusChangeRule`, `SecurityHeaderRule`, `CertificateExpiryRule`, `CertificateWarningRule`, `CertificateFinding`, `CertificateReasons`, `RedirectFinding`, `RedirectWarningRule` | nothing |
+| `DeadSwitch.Application` | `MonitoredServiceService`, `ServiceOverview`, `ServiceConfiguration`, `UrlSafety`, `ServiceLocks`, `ServiceValidationException`, `CheckInProgressException`, `NotificationFailedException`, `StatusChange`, `SecurityHeaderCheck`, `CertificateCheck`, `SecurityWarning`, `SecurityWarningFinder`, `SecurityWarningSettings`, `RedirectTargetCheck`, `RedirectTargetParser`, interfaces including `INotifier` | Domain |
+| `DeadSwitch.Infrastructure` | `DeadSwitchDbContext`, repository, `HttpHealthProbe`, `SecurityHeaderReader`, `RedirectTargetReader`, `TlsHandshakeRecorder`, `TlsHandshake`, `ProtectedHttpHandler`, `PublicInternetConnector`, `DestinationBlockedException`, `DiscordNotifier`, `DiscordMessage`, `DiscordOptions`, `DiscordWebhookUrl`, migrations | Application, Domain |
 | `DeadSwitch.Api` | Startup in `Program.cs`, `ServiceEndpoints`, `RegisterServiceRequest`, `UpdateServiceRequest`, `UtcDateTimeOffsetConverter`, `MonitoringWorker`, `SecurityHeaders`, `CrossSiteRequests`, `LocalOnlyCheck`, and the dashboard in `wwwroot` | Application, Domain, Infrastructure |
 | `DeadSwitch.Tests` | Automated tests | Api, and the other projects through it |
 
@@ -73,7 +73,18 @@ A `404` has an empty body. A host name that is not allowed gets a `400` from the
 | A timeout, a connection failure, a blocked address, or a record older than this feature | null | null | As before |
 | `http` | null | `Not an HTTPS address.` | As before |
 
-**`GET /services/overview`.** Each row has `id`, `name`, `url`, `currentStatus`, `lastKnownStatus`, `lastCheckedAt`, `isEnabled`, `responseTimeMs`, `failureReason`, `securityGrade`, `missingSecurityHeaders`, `securityNotAssessedReason`, `certificateNotAfterUtc`, `certificateDaysLeft`, `certificateExpiryText` and `certificateNotAssessedReason`. `certificateDaysLeft` is counted from now, rounded down, and is negative after the date has passed. `certificateExpiryText` is `Expired`, `Expires today`, `1 day left` or `N days left`. The certificate values only come from the newest check, so an older date is never shown after a check that saw no valid certificate. The values from `responseTimeMs` and on come from the newest check record, and are null when `lastCheckedAt` is null. That condition matters: a new URL empties `lastCheckedAt` but keeps the history, so without it a row would show the response time of the old address, also after changing back to an earlier URL.
+**The redirect target of a check.** A check record, and so `POST /services/{id}/check` and the history, has two more fields. `GET /check` and `GET /services/{id}/check` are unchanged. The raw `Location` value is never saved or returned.
+
+| Case | `redirectFinding` | `redirectTargetHost` |
+|---|---|---|
+| No response, 4xx or 5xx, 3xx without `Location`, or a record older than this feature | null | null |
+| 2xx | `NO_REDIRECT` | null |
+| A relative target or the same host | `SAME_HOST` | null |
+| Another public host | `OTHER_HOST` | The normalised host name or a public IP address |
+| A private address, `localhost` or an internal name | `INTERNAL_TARGET` | null, the value is hidden |
+| A value that cannot be read safely | `UNREADABLE` | null |
+
+**`GET /services/overview`.** Each row has `id`, `name`, `url`, `currentStatus`, `lastKnownStatus`, `lastCheckedAt`, `isEnabled`, `responseTimeMs`, `failureReason`, `securityGrade`, `missingSecurityHeaders`, `securityNotAssessedReason`, `certificateNotAfterUtc`, `certificateDaysLeft`, `certificateExpiryText`, `certificateNotAssessedReason`, `redirectFinding` and `redirectTargetHost`. The dashboard shows the last two in the column "Redirect", as text and never as a link. `certificateDaysLeft` is counted from now, rounded down, and is negative after the date has passed. `certificateExpiryText` is `Expired`, `Expires today`, `1 day left` or `N days left`. The certificate values only come from the newest check, so an older date is never shown after a check that saw no valid certificate. The values from `responseTimeMs` and on come from the newest check record, and are null when `lastCheckedAt` is null. That condition matters: a new URL empties `lastCheckedAt` but keeps the history, so without it a row would show the response time of the old address, also after changing back to an earlier URL.
 
 **Security headers.** Every answer from the application has the headers listed under "The dashboard" in the security notes, JSON and errors included.
 
@@ -118,6 +129,7 @@ dotnet run --project DeadSwitch.Api --launch-profile http -- --Discord:WebhookUr
 | `AddLastKnownStatusToMonitoredService` | Adds the nullable `LastKnownStatus` and copies `CurrentStatus` into it where that is `UP` or `DOWN`, so that an existing service does not lose its next change. `UNKNOWN` stays NULL. `CurrentStatus` cannot do this job: after UP, UNKNOWN, DOWN it no longer remembers that the service was up |
 | `AddSecurityHeadersToCheckRecords` | Adds the nullable text columns `SecurityGrade`, `MissingSecurityHeaders` and `SecurityNotAssessedReason` to `CheckRecords`. Existing rows get NULL, which means that nothing was assessed. No data is rewritten |
 | `AddCertificateToCheckRecords` | Adds the nullable columns `CertificateNotAfterUtc` and `CertificateNotAssessedReason` to `CheckRecords`. Existing rows get NULL, which means that no certificate was assessed. No data is rewritten |
+| `AddRedirectTargetToCheckRecords` | Adds the nullable text columns `RedirectFinding` and `RedirectTargetHost` (max 253) to `CheckRecords`. Existing rows get NULL, which means no finding: `Location` was never saved, so nothing can be filled in afterwards. No table is rebuilt and no data is rewritten. As a result, the first check after the upgrade never gives a redirect warning. SQLite does not enforce the length, so the limit of 253 is set in the code and `HasMaxLength` is documentation only. `Up` holds only the two `AddColumn` calls. Proven by `RedirectMigrationKeepsOldRecordsWithoutAFinding` |
 
 The application does not run migrations at startup. Run `dotnet ef database update` when setting up a database, and after pulling a new migration: without it, reading a service fails because the column is missing. `MakeCurrentStatusRequired` has run in the tests and from empty against a separate database file, but not against the local development database. Run the command there as well.
 
@@ -129,10 +141,15 @@ Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, s
 
 ## Latest verified result
 
-Date: 2026-11-09.
+Date: 2026-11-10, on `feat/redirect-target`.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
-- `dotnet test DeadSwitch.slnx`: 1221 passed, 0 failed, on the final code.
+- `dotnet test DeadSwitch.slnx`: 1434 passed, 0 failed, 0 skipped, on the final code. Run on Windows 10.0.26200, `win-x64`, SDK 10.0.301. **Nothing has been run on Linux.**
+- `dotnet ef migrations has-pending-model-changes`: no changes.
+- The redirect target has eight test classes of its own, 204 tests: 107 test the parser as text with no network, 19 the reader with no network, 14 the real probe with a stand-in for the network, 11 the real handler against a local raw server on loopback, 9 the storage through the API, 26 the whole flow through the API and the database with a fake probe and a fake notifier, 11 the real notifier with a stub, and 7 the domain rule. Rows in existing classes cover the migration, the overview fields and the dashboard's files. No automated test reaches a real website or Discord.
+
+The numbers below are from 2026-11-09, when 1221 tests passed, and are kept for the earlier features.
+
 - 206 of the tests come from the security warnings: 8 test the header comparison, 52 the certificate rule, 16 the baseline queries against SQLite, 70 the whole flow through the API and the database with a fake probe and a fake notifier, 1 the threshold time read back from the database, 10 failures and shutdown, 1 a real shutdown of the loop, 34 the real notifier with a stub, and 14 the setting. No automated test reaches a real website or Discord.
 - 118 of the tests come from the TLS certificate: 23 test the recorder directly, 9 use the real connector and handler over HTTPS on `127.0.0.1`, 28 use the real probe with a stand-in for the network, 12 use the real probe over real TLS with a local connection step, 6 use the API and the database, 15 test the expiry rule, 12 test the overview, 10 read the dashboard's files as text, 1 tests the migration and 2 test the registered handler. No automated test reaches a real website.
 - 76 of the tests come from the security headers: 27 test the reader directly, 9 use the real handler against a local server on `127.0.0.1`, 8 use the real probe with a stand-in for the network, 9 use the API with a fake or scripted probe, 7 test the rule, 15 read the dashboard's files as text, and 1 tests the migration. No automated test reaches a real website.
@@ -173,6 +190,25 @@ A certificate is only visible during a handshake, so a reused connection has not
 `ConnectionClose` was chosen because it keeps one handler and only affects the probe. This is local CPU time and says nothing about the network. The memory figure covers the whole process, the local server included. The measuring code was removed and never committed.
 
 In the same run, `Uri.IdnHost` and `SslStream.TargetHostName` held the same text for an IPv4 address, an IPv6 address, an ordinary name, upper case, a trailing dot and an IDN name.
+
+### Red runs and mutation check of the redirect target
+
+The red run was made against empty skeletons, where the parser answers null and the columns and fields exist. 178 of 1431 tests failed, all of them new tests, and all on assertions: no `SqliteException`, `NullReferenceException` or `DbUpdateException`. The new tests that passed cannot be red against a parser that answers null, for example that a failure gives no finding. They are proven by the mutations instead.
+
+52 mutations were made, one at a time, each restored with an edit and with a clean `git status` between the runs. None turned off `ConnectCallback`. 47 are caught. Five survive, and all are checks that another step also covers: three slashes, a slash after the scheme, more than one `@`, lower case and empty labels. They are kept on purpose; see "Code style exceptions". The rule for the first check survived at first, and is caught after three tests were added for changing the URL and for another service.
+
+Three parts were then mutated one at a time as well, with all tests run each time:
+
+| Change | Failing tests |
+|---|---|
+| `IsExternal` answers false for `OtherHost` | 15 |
+| `IsExternal` answers false for `InternalTarget` | 3 |
+| `InternalTarget` gets the warning kind for an unreadable target | 1 |
+
+What was measured on Windows, through the parser's result and the mutations, not by calling `Uri` directly:
+- `NonValidated`: two raw `Location` headers show as two values and give `UNREADABLE`, and a value the framework cannot parse is still visible and gives `UNREADABLE`. With the typed `Headers.Location` instead, 5 tests failed.
+- `SocketsHttpHandler`, with raw bytes from a local server through the real probe and handler: no case gave DOWN. CR, NUL, 0x01, 0x7F and 0xE9 in the value give UP and `UNREADABLE`, a folded value gives UP and `UNREADABLE`, and a bare LF ends the header and gives UP and `OTHER_HOST`.
+- `Uri`: `0x7f.1`, `2130706433`, `127.1`, `0177.0.0.1` and `[::ffff:127.0.0.1]` give `INTERNAL_TARGET`. `example.123`, `1.2.3.4.5`, `256.256.256.256` and `example.0x7f` give `UNREADABLE` because of the rule for a numeric last label; without the rule all four failed. `a@b@c`, `https:///x` and empty labels are stopped even without the parser's own checks, and names become lower case anyway, which is why those four mutations survive.
 
 ### Red runs of the security warnings
 
@@ -942,12 +978,22 @@ This is one run in one browser, against sites whose certificates can change.
 
 ### Not run manually
 
-Security warnings, proven by tests only until the owner's manual run:
+Security warnings: manual test passed on 2026-11-09 with the worker and real Discord. `no longer sends` and `was rejected` each arrived exactly once, with a baseline changed by hand in a separate database. Silent at the following checks and after a real restart. `has at most 365 days left` for github.com without changed rows. The ordinary database was untouched. The reviewed part of the log held no webhooks, but the whole log was not seen. A real deterioration on a real site has not been provoked.
 
-- Any real warning in Discord, and the worker running with Discord turned on.
-- A header that really disappears, and a certificate that goes from accepted to rejected on a real site, cannot be provoked. The manual run uses rows changed by hand in a separate database, so it proves the chain from the worker to Discord but not the event itself.
+Security warnings, still proven by tests only:
+
 - How Discord shows a line separator or an invisible character. The tests prove what is sent.
 - A restart in the tests is a new worker against the same database, and not a new process.
+
+Redirect target, proven by tests only until the owner's manual run:
+
+- A real redirect warning in Discord, and how Discord shows it: no link, no preview and no ping. The tests prove what is sent.
+- The "Redirect" column in a real browser. The script tests read the file as text.
+- A real hijack cannot be provoked. The manual run changes rows by hand in a separate database, so it proves the chain from the worker to Discord but not the event itself.
+- How a real server sends hostile values. The tests send raw bytes from a local server on loopback.
+- Linux. The tests run on Windows, where `Uri.TryCreate("/a", ...)` does not behave as on Linux. They show that `/a` gives `SAME_HOST` here and that the form step does not use `Uri`. That it holds on Linux follows from how the code is built, but is not proven until the tests run there, for example in GitHub Actions in phase 4.
+- An internal name without DNS: `db01.corp.example.com` looks public and is shown. Looking it up would break the rule that the parser makes no DNS call, and the list of internal suffixes is not complete.
+- The table of parsing differences is built on known tricks and cannot be complete against every browser.
 
 TLS certificate, not confirmed in the owner's run:
 
@@ -1082,7 +1128,8 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | Dashboard (phase 5, not part of the MVP) | Done | The server side is proven by tests and a run against the real server, and the page by the owner's run in Chrome. Step D (`eval`) and the visible failure message are not confirmed on the screen |
 | Security headers with a grade, saved per check | Done | Proven by tests and by the owner's run against real websites in Chrome. Not tested: old rows in a real upgraded database, and whether a grade is fair for the values |
 | Certificate expiry saved per check, days left on the dashboard | Done | Proven by tests against a local server and by the owner's run against real websites in Chrome. Not confirmed manually: `Expired` on the screen, revocation, and the worker with Discord turned on. The cause of the timeouts in that run has not been established |
-| Warnings when security gets worse | Built, manual run remaining | Proven by tests with a fake probe, a fake notifier and a stub. Real messages in Discord wait for the owner's manual run; see "Not run manually" |
+| Warnings when security gets worse | Done | Proven by tests with a fake probe, a fake notifier and a stub. Manual test passed on 2026-11-09; see "Not run manually" |
+| Redirect target saved per check, with a warning when it moves to another domain (phase 3 task 4, not part of the MVP) | Built, manual run remaining | Proven by tests with a fake probe, a fake notifier, a stub and a local raw server. Real messages in Discord and the dashboard column wait for the owner's manual run; see "Not run manually" |
 | README | Missing | |
 | GitHub Actions | Missing | Waits for the owner's approval |
 
@@ -1134,6 +1181,26 @@ What a check says about the certificate, read by `CertificateWarningRule.Classif
 | Any | `NotSeen` or `NotLookedAt` | No, and the baseline stays |
 
 The thresholds are the setting (default 14) and then 7 and 1, each used only if it is below the setting. Having that many days or fewer left counts, and `DaysLeft` gives the same number as the dashboard. A first check inside a threshold warns because it is a fact about the certificate, and otherwise the next warning would come at the last threshold. An expired certificate is refused by TLS and is covered by `Rejected`.
+
+The redirect target, counted on the rows in `CheckRecords` for the current URL, `RedirectWarningRule` and `SecurityWarningFinder`:
+
+1. The finding is not external (`OtherHost`, `InternalTarget` or `Unreadable`): no warning.
+2. `LastCheckedAt` is missing, a new service or a new URL: no warning, the same as for headers.
+3. No earlier row with a finding for this URL, the first check after the migration or only timeouts: no warning.
+4. The same finding and host exist for this URL within 30 days before the check: no warning.
+5. Otherwise one warning.
+
+| Course | Result |
+|---|---|
+| 200 for months, then 301 to A | Warning |
+| A, A, A | One warning |
+| A, then B | A warning for B |
+| A, B, A within 30 days | No warning for the second A |
+| A, 200, A within 30 days | No warning for the second A |
+| A, 200 for more than 30 days, A | Warning. Exactly 30 days after A was last seen gives no warning |
+| The first check already goes to A | No warning, but A is shown on the dashboard |
+
+`www.` is removed before the comparison, but only if what is left still holds a dot, so `www.com` stays `www.com`. `http` to `https` on the same host is not another domain. The scheme and the port are never saved.
 
 ## Status rules
 
@@ -1189,6 +1256,16 @@ Check records saved before this rule keep their old status: an earlier 3xx stays
 - The browser asks for `favicon.ico`, which does not exist and is refused by the policy, so one line in the console is expected.
 - A security grade measures whether five headers are present, not whether their values are good. `Strict-Transport-Security: max-age=0` and a policy with `unsafe-inline` both count. Every header weighs the same, and a site with `frame-ancestors` but no `X-Frame-Options` counts as missing one.
 - A service that answers with a redirect or over `http` never gets a grade, and only the page itself can be assessed: the target of a redirect is not visited.
+- Only the first hop of a redirect is assessed. For `example.com` to `www.example.com` to `evil.example`, the second hop is not seen, because redirects are never followed. The owner should therefore monitor the final address.
+- Redirects made with JavaScript or HTML are not detected, because only the headers are read and not the page.
+- `Unreadable` is one category without a host. After an `Unreadable` row, a new unreadable value gives no warning, so an attacker can use, for example, `/\evil.example` without a new warning. The window moves with every new row, so this holds for as long as the site keeps answering with unreadable values, and for 30 days after the last time.
+- `InternalTarget` works the same way: one category and no host, so a new internal target gives no warning after an earlier one.
+- A lost redirect warning can give silence for the same target for 30 days, counted from the newest row with that target. A failed send, or a crash between the save and the send, still counts the target as seen. If the target stays, a new row is added at every check, so the silence then lasts for as long as the target stays. The dashboard shows the target all the time.
+- An attacker who changes the host name at every answer gives one message per check.
+- On the same host, a downgrade from `https` to `http` and another port are not detected.
+- Raw UTF-8 in `Location`, for example in the path, gives `Unreadable` and can give a false alarm, because repairing the encoding would be a guess in security code. Such a site also gets the blindness described above.
+- A legitimate move, such as a new login domain or a CDN, gives one warning per new target.
+- A bare line feed (LF) in a `Location` header ends the header line. The value before it is accepted and can become `OtherHost`, and the rest never reaches the probe result, so it is not saved. Proven by `ARawLineFeedEndsTheHeader` against a local raw server. A raw NUL or carriage return makes the whole value unreadable instead.
 - No single automated test runs the connector and the probe together over HTTPS, because the production rules stop loopback addresses and other ports. One group runs the real connector and handler, and another the real probe and handler with a local connection step.
 - A probe check always opens a new connection, so `responseTimeMs` always includes TCP and TLS. Before, a check within a minute of the last one could reuse a connection.
 - The certificate note is kept per host and not per port or per check, because the callback cannot see either. `https://host:443` and `https://host:80` checked at the same moment could get each other's date. Two checks of the same host at the same moment share a note, so one of them can show that nothing was seen. Neither can affect the validation or the status.
@@ -1210,6 +1287,7 @@ These parts do not yet follow the project's plain style, on purpose:
 - `ValidateOnStart` is kept for Discord although the startup line reads the options anyway, for the same reason.
 - `MonitoredServiceService.SendNotificationAsync` catches `Exception` but does not pass it to the logger, because its text could hold the webhook address.
 - `SecurityHeaders` sets its headers in a callback from `OnStarting` instead of directly, because the exception handler empties the headers before it writes a 500.
+- `RedirectTargetParser` is security-critical and longer than the rest of the code. It decides the form of a value with plain string checks before `Uri` is used, because `Uri.TryCreate("/a", UriKind.Absolute, ...)` can give `file:///a` on Linux. Five of its checks are covered by another step as well, and are kept on purpose so that the protection does not rely on how `Uri` or the other checks happen to work: three slashes at the start, a slash after `http://` or `https://`, more than one `@` in the authority, lower case, and empty labels. The mutation check shows that removing any one of them changes no test.
 - `CrossSiteRequests` has two checks that overlap on purpose: not every browser sends `Sec-Fetch-Site` to `localhost`, and the protection must not depend on one header.
 
 ## Security notes
@@ -1267,10 +1345,18 @@ Checked against Discord's documentation, on the webhook and message pages only:
 - The pages say nothing about `/api/` in the path or about rate limits. The manual run confirms that a real address under `/api/webhooks/` on `discord.com` works. Rate limits remain unread and untested.
 
 The security warnings:
-- A warning holds only the service's name and our own fixed texts. The type `SecurityWarning` has no field for anything a monitored site has written: the header names come from the fixed list in `SecurityHeaderRule`, the number of days is one of our own thresholds, and no URL, date or number of days left is sent.
+- A warning holds only the service's name, our own fixed texts and, for a redirect to another domain, the target's host name. The host is the only thing a monitored site has written. A name has passed the allowlist in `RedirectTargetParser`: only `a-z`, `0-9`, `.` and `-`, at most 253 characters. An IP address is written again by `IPAddress.ToString` in its shortest form, so it holds only hex digits, dots and colons. The header names come from the fixed list in `SecurityHeaderRule`, the number of days is one of our own thresholds, and no URL, date or number of days left is sent.
 - The name goes through the same cleaning as in a status message: cut at 100 characters, a backtick replaced, and written as inline code, which stops links and previews. The empty `parse` turns off every ping whatever the formatting.
 - That cleaning now also replaces line separators, paragraph separators and invisible format characters, which `char.IsControl` misses. This applies to status messages as well. A joined emoji loses its joiner.
 - There is no new way out: warnings use the existing Discord client and its protected handler.
+
+The redirect target:
+- No new request and no DNS. `AllowAutoRedirect` stays `false` and `ProtectedHttpHandler` was not changed. The parser only uses `Uri.TryCreate`, `Uri.IdnHost` and `IPAddress.TryParse`. Proven by tests where the local server never sees the target and the fake DNS is asked only about the original host.
+- The raw `Location` value never leaves the parser. `RedirectTargetCheck` has no field for it, the parser logs nothing and throws nothing with the value in it. Only a fixed category and at most one host are saved. User name, password, path, query, fragment, scheme and port are never saved, shown or sent. Proven by a test with a marker in each of them that is found neither in the history, the overview, Discord nor the log.
+- The value is read through `response.Headers.NonValidated`, because the typed `Headers.Location` hides several values and broken values.
+- Anything that a browser could read differently from .NET gives `Unreadable`, and the form is decided with string checks before `Uri` is used.
+- Discord: the host is written without a scheme and as inline code, so Discord neither links it nor fetches a preview, and the empty `parse` turns off every ping. With the allowlist these are three independent layers. A private or internal target is never shown, only a fixed text.
+- The dashboard writes the host with `textContent`, never as a link, and the Content Security Policy is unchanged.
 
 The dashboard:
 
@@ -1325,7 +1411,7 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes early so that every new feature is visible in it at once. The MVP still covers phases 1 to 4; the dashboard is built earlier but is not part of the MVP. Each task is one branch, with a plan approved first.
 
-**Next step:** the owner runs the manual test of `feat/security-warnings`, then reviews and merges it. A single timeout still giving DOWN and UP messages is a task of its own later.
+**Next step:** `feat/security-warnings` is done and merged. The owner runs the manual test of `feat/redirect-target`, then reviews and merges it. A single timeout still giving DOWN and UP messages is a task of its own later.
 
 ### Phase 1: Stable foundation
 
@@ -1370,7 +1456,7 @@ The phase is built as four tasks, one branch each, in this order:
 | 1 | `feat/security-headers` | Read the five headers, give a grade, save it per check, show it in the API and the dashboard | Yes |
 | 2 | `feat/tls-certificate` | Read and save the certificate's expiry date, the first automated HTTPS test through the connector, days left in the dashboard | Yes |
 | 3 | `feat/security-warnings` | Warnings through `INotifier`: a certificate about to expire (configurable, default 14 days) and a header that has disappeared since the previous check | Yes |
-| 4 | `feat/redirect-target` | Save `Location` safely and warn when the host moves to another domain | No, can be postponed |
+| 4 | `feat/redirect-target` | Save `Location` safely and warn when the host moves to another domain. Built and proven by tests, manual run remaining | No |
 
 Headers come first because they are already in the response the probe receives, so nothing about how connections are opened has to change. The certificate is the only task that changes the connection step. The warnings compare data that the first two tasks save.
 
@@ -1399,7 +1485,7 @@ Requirements for the tasks:
 |---|---|---|
 | 3 | A service going to UNKNOWN can mean that its name now points to a private address. Phase 2 decided on a warning in the log and no message, because nothing was learned about the service | Consider a notification of its own in phase 3 |
 | 3 | 3xx counts as UP and is not followed, so `http://example.com` answering 301 gives only the redirect's headers and no certificate. That would produce a misleading grade and false alarms | Decided: only `https` with a 2xx gets a grade. Everything else gets a fixed reason and no grade |
-| 3 | Save the redirect target (`Location`) and warn when it suddenly points to another domain, because that can mean the site has been hijacked. The value comes from the monitored server and can contain internal addresses, so how it is stored and shown must be decided | Not decided and not built. Starting point: never follow the value, compare only the host, show it as plain text and never as a link, and hide a target that is not a public address. Legitimate moves, such as a new login domain or CDN, can cause false alarms |
+| 3 | Save the redirect target (`Location`) and warn when it suddenly points to another domain, because that can mean the site has been hijacked. The value comes from the monitored server and can contain internal addresses, so how it is stored and shown must be decided | Decided on 2026-11-09 and built on `feat/redirect-target`: never follow the value, compare only the host with `www.` removed, show it as plain text and never as a link, hide a target that is not a public address, no warning at the first check, fixed texts for unreadable and internal targets, and a window of 30 days against switching. See "Security warning rules". Legitimate moves, such as a new login domain or CDN, give one warning per new target |
 | 3 | A certificate is only visible during the TLS handshake, and a reused connection does no new handshake. "On each check" therefore does not work with pooled connections | Decided: the probe asks for a new connection on every check with `Connection: close` over HTTP/1.1. The local cost was measured; see "Cost of reused connections". A check that still sees no handshake says so and is not called invalid |
 | 4 | Docker tooling licence | Not settled. Nothing is installed until the licence has been confirmed |
 | 4 | Inside a container the application must listen on `0.0.0.0`, which `LocalOnlyCheck` refuses. Compose binds to `127.0.0.1` on the host, which the check cannot see | The check must be turned off explicitly in the container. No such setting exists yet. `AllowedHosts` keeps working, as the browser still sends `localhost` |
