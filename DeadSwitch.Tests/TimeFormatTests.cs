@@ -141,10 +141,6 @@ public class TimeFormatTests
         HttpResponseMessage update = await client.PutAsJsonAsync($"/services/{service.Id}", configuration);
         string updateJson = await update.Content.ReadAsStringAsync();
         Assert.Contains(expectedLastCheckedAt, updateJson);
-
-        // This route runs a new check, which starts after the first one moved the clock.
-        string compatibilityJson = await client.GetStringAsync($"/services/{service.Id}/check");
-        Assert.Contains("\"lastCheckedAt\":\"2026-11-03T12:00:00.5Z\"", compatibilityJson);
     }
 
     // +01:00 has never been written by the application. It is tested anyway, because it shows that

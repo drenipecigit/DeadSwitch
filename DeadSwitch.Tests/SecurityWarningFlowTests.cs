@@ -284,20 +284,6 @@ public class SecurityWarningFlowTests
     }
 
     [Fact]
-    public async Task OlderCompatibilityRouteAlsoWarns()
-    {
-        await using SecurityWarningScenario scenario = await SecurityWarningScenario.StartAsync();
-        await scenario.CheckAsync(TestProbeResults.Assessed(Nothing));
-        scenario.App.Clock.Advance(TimeSpan.FromSeconds(1));
-        scenario.App.Probe.Result = TestProbeResults.Assessed(Frame);
-
-        HttpResponseMessage response = await scenario.Client.GetAsync($"/services/{scenario.Service.Id}/check");
-
-        response.EnsureSuccessStatusCode();
-        Assert.Single(scenario.GetWarnings());
-    }
-
-    [Fact]
     public async Task CheckingAnAddressWithoutSavingNeverWarns()
     {
         await using SecurityWarningScenario scenario = await SecurityWarningScenario.StartAsync();

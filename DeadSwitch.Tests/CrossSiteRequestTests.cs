@@ -21,7 +21,6 @@ public class CrossSiteRequestTests
     {
         TheoryData<string, string> routes = new TheoryData<string, string>();
         routes.Add("POST", "/services/{id}/check");
-        routes.Add("GET", "/services/{id}/check");
         routes.Add("GET", "/check?url=https://example.com");
         routes.Add("GET", "/services");
         routes.Add("GET", "/services/overview");

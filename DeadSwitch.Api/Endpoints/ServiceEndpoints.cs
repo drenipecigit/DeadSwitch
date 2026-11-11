@@ -28,7 +28,6 @@ public static class ServiceEndpoints
         app.MapDelete("/services/{id:guid}", DeleteServiceAsync);
         app.MapPost("/services/{id:guid}/check", CheckServiceAsync);
         app.MapGet("/services/{id:guid}/history", GetHistoryAsync);
-        app.MapGet("/services/{id:guid}/check", CheckServiceCompatibilityAsync);
         app.MapGet("/check", CheckUrlAsync);
     }
 
@@ -129,43 +128,6 @@ public static class ServiceEndpoints
 
         List<CheckRecord> history = await monitoring.GetHistoryAsync(id, offset, limit, ct);
         return Results.Ok(history);
-    }
-
-    // Compatibility with the original read-triggered checks; use POST for new clients.
-    private static async Task<IResult> CheckServiceCompatibilityAsync(
-        Guid id,
-        MonitoredServiceService monitoring,
-        HttpContext context,
-        CancellationToken ct)
-    {
-        // no-store: a cached answer would show an old status as if it were current.
-        context.Response.Headers.CacheControl = "no-store";
-
-        CheckRecord? record = await monitoring.CheckAsync(id, ct: ct);
-        if (record == null)
-        {
-            return Results.NotFound();
-        }
-
-        // The service can have been deleted right after the check, so it can be missing here.
-        MonitoredService? found = await monitoring.GetByIdAsync(id, ct);
-        string? name = null;
-        if (found != null)
-        {
-            name = found.Name;
-        }
-
-        return Results.Ok(new
-        {
-            id,
-            name,
-            url = record.Url,
-            status = record.Status,
-            statusCode = record.StatusCode,
-            responseTimeMs = record.ResponseTimeMs,
-            lastCheckedAt = record.CheckedAtUtc,
-            failureReason = record.FailureReason
-        });
     }
 
     private static async Task<IResult> CheckUrlAsync(string url, IHealthProbe probe, HttpContext context, CancellationToken ct)

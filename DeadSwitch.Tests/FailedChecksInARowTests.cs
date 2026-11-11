@@ -196,6 +196,28 @@ public class FailedChecksInARowTests
         Assert.Equal(1, await ReadFailedChecksInARowAsync(app, service.Id));
     }
 
+    // Nothing is known about the new address, so its DOWN alarm has no old status, not the UP of the old one.
+    [Fact]
+    public async Task TwoFailuresOnANewUrlAfterOneOnTheOldUrlGiveOneDownWithoutAnOldStatus()
+    {
+        await using TestApp app = await CreateAppAsync();
+        using HttpClient client = app.CreateClient();
+        MonitoredService service = await RegisterAsync(app, client);
+
+        await PostCheckAsync(app, client, service.Id, Up);
+        await PostCheckAsync(app, client, service.Id, TestProbeResults.Timeout());
+        await ChangeUrlAsync(client, service.Id, SecondUrl);
+        await PostCheckAsync(app, client, service.Id, TestProbeResults.Timeout());
+        Assert.Empty(app.Notifier.GetChanges());
+
+        await PostCheckAsync(app, client, service.Id, TestProbeResults.Timeout());
+
+        StatusChange change = Assert.Single(app.Notifier.GetChanges());
+        Assert.Null(change.PreviousStatus);
+        Assert.Equal(ServiceStatus.Down, change.NewStatus);
+        Assert.Equal(SecondUrl, change.ServiceUrl);
+    }
+
     // Only the alarm waits. The history and the current status still show what the check saw.
     [Fact]
     public async Task SingleFailureStillSavesDownInHistoryAndCurrentStatus()

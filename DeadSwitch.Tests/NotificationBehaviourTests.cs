@@ -37,30 +37,40 @@ public class NotificationBehaviourTests
         Assert.Equal("HTTP 500", change.FailureReason);
     }
 
+    // A link or an image tag can send a GET without the owner noticing, so a GET must change nothing.
+    // The service has one failed check, so a check here would confirm DOWN and send an alarm.
     [Fact]
-    public async Task CompatibilityRouteNotifiesLikeTheOtherRoutes()
+    public async Task GetOnTheCheckRouteChangesNothing()
     {
         await using TestApp app = await CreateAppAsync();
         using HttpClient client = app.CreateClient();
         MonitoredService service = await RegisterAsync(app, client);
+        await PostCheckAsync(app, client, service.Id, Up);
+        await PostCheckAsync(app, client, service.Id, Down);
+        MonitoredService before = await app.ReadSavedServiceAsync(service.Id);
 
-        app.Probe.Result = Up;
-        HttpResponseMessage firstCheck = await client.GetAsync($"/services/{service.Id}/check");
-        firstCheck.EnsureSuccessStatusCode();
+        // A later time, so a check would also change the time of the last check.
+        app.Clock.Advance(TimeSpan.FromSeconds(60));
         app.Probe.Result = Down;
-        HttpResponseMessage secondCheck = await client.GetAsync($"/services/{service.Id}/check");
-        secondCheck.EnsureSuccessStatusCode();
-        Assert.Empty(app.Notifier.GetChanges());
-        HttpResponseMessage thirdCheck = await client.GetAsync($"/services/{service.Id}/check");
-        thirdCheck.EnsureSuccessStatusCode();
+        HttpResponseMessage response = await client.GetAsync($"/services/{service.Id}/check");
 
-        StatusChange change = Assert.Single(app.Notifier.GetChanges());
-        Assert.Equal(ServiceStatus.Up, change.PreviousStatus);
-        Assert.Equal(ServiceStatus.Down, change.NewStatus);
+        Assert.Equal(2, app.Probe.Calls);
+        Assert.Empty(app.Notifier.GetChanges());
+
+        List<CheckRecord>? history = await client.GetFromJsonAsync<List<CheckRecord>>($"/services/{service.Id}/history", TestJson.Options);
+        Assert.Equal(2, history!.Count);
+
+        MonitoredService after = await app.ReadSavedServiceAsync(service.Id);
+        Assert.Equal(before.FailedChecksInARow, after.FailedChecksInARow);
+        Assert.Equal(before.CurrentStatus, after.CurrentStatus);
+        Assert.Equal(before.LastKnownStatus, after.LastKnownStatus);
+        Assert.Equal(before.LastCheckedAt, after.LastCheckedAt);
+
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
     }
 
     [Fact]
-    public async Task WorkerNotifiesLikeTheManualRoutes()
+    public async Task WorkerNotifiesLikeTheManualRoute()
     {
         await using TestApp app = await CreateAppAsync();
         using HttpClient client = app.CreateClient();

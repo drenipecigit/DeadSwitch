@@ -31,7 +31,6 @@ DeadSwitch is a personal uptime monitor. The backend is **not finished**: see th
 | `POST /services/{id}/check` | Manual check, saved to the history |
 | `GET /services/{id}/history?skip=&take=` | Check history, newest first; `take` is 1 to 200 |
 | `GET /check?url=` | Check a public URL without saving anything |
-| `GET /services/{id}/check` | Older compatibility route; also saves to the history |
 
 ## API contract
 
@@ -1671,3 +1670,35 @@ Requirements for the tasks:
 | 6 | With a login the check, `AllowedHosts` and the block of other sites must be looked at again, as a real host name and other origins may then be valid | Decide with the login |
 | 5 and 6 | A static page cannot hide an API key | Design the authentication with the dashboard in mind |
 | 6 | Rate limiting is planned for `/check`, but `POST /services/{id}/check` and `GET /services/{id}/check` also start network requests, and the locks do not limit checks of different services | Cover all the check routes in phase 6 |
+
+## Phase 6, first part: the GET check route is removed
+
+Done on `fix/remove-get-check`, on 2026-11-11. Proven by tests; the manual test is still to be run.
+
+**`GET /services/{id}/check` is removed.** It ran a real check, the same as `POST /services/{id}/check`: it sent a request, saved a history row, changed the status and the count of failed checks, and could send an alarm or a security warning. A GET must not change anything, because a link, an image tag or a prefetch can send one without the owner noticing. No code in the application used it: the dashboard calls only `GET /services/overview`, and the worker calls the service directly in C#. `POST /services/{id}/check` and `GET /check` are unchanged.
+
+A GET on the old path now gives **405 Method Not Allowed**, because a POST still exists on the same path. The test `GetOnTheCheckRouteChangesNothing` proves that such a GET sends no request, saves no history row, changes nothing on the service and sends no alarm. It was run red with the route still there, and turned red again when the route was put back.
+
+Tests removed or shortened, because they only proved the removed route:
+
+| Test | Change |
+|---|---|
+| `NotificationBehaviourTests.CompatibilityRouteNotifiesLikeTheOtherRoutes` | Removed. The POST route and the worker have their own notification tests. `WorkerNotifiesLikeTheManualRoutes` is renamed to `WorkerNotifiesLikeTheManualRoute` |
+| `ResponseShapeTests.CompatibilityCheckRouteReturnsServiceFieldsAndIsNotCached` | Removed. It locked the field names of an answer that no longer exists |
+| `ResponseShapeTests.EveryCheckRouteReturnsStatusAsText` | The GET step is removed. POST, the service, the history and `GET /check` are still checked |
+| `SecurityWarningFlowTests.OlderCompatibilityRouteAlsoWarns` | Removed. POST and the worker are covered by the other tests in the file |
+| `TimeFormatTests.EveryRouteWritesTheStartOfTheCheckInUtcWithZ` | The GET step is removed. POST, the history, the list, the service and PUT are still checked |
+| `CrossSiteRequestTests.AllApiRoutes` | The GET row is removed, 3 test cases. The POST row and `GET /check` remain |
+
+**SQL commands are no longer logged.** `appsettings.json` sets `Microsoft.EntityFrameworkCore.Database.Command` to `Warning`. EF Core writes every SQL command on Information, and the worker reads the database every second, so the log used to fill up with "Executed DbCommand" lines. Development reads `appsettings.json` first, so the setting is not repeated in `appsettings.Development.json`. `DatabaseCommandLoggingTests` proves it in Development and Production. It was red before the change. The test reads the log text that EF Core writes, so it would pass without proving anything if EF Core changed that text.
+
+**A new URL after a failed check.** `TwoFailuresOnANewUrlAfterOneOnTheOldUrlGiveOneDownWithoutAnOldStatus` runs UP, a failed check, a new URL, and two failed checks on the new URL. It proves that exactly one DOWN alarm is sent, at the second failure on the new URL, with no previous status. The code already worked, so the test was green from the start. Mutations proved that it catches the errors: without the reset of the count on a new URL it fails (as does `NewUrlStartsTheCountOver`), and without the reset of the last known status it fails (as do three older tests).
+
+Result: `dotnet build DeadSwitch.slnx` 0 warnings, 0 errors. `dotnet test DeadSwitch.slnx` 1552 passed, 0 failed, 0 skipped, on Windows. Before the task 1554 passed; 6 test cases were removed and 4 added. No package and no migration was added.
+
+Not proven:
+
+- Whether a script or bookmark outside the repository used `GET /services/{id}/check`.
+- What a GET from another site to the removed path gets. The middleware may answer 403 before routing gives 405. Either way nothing is run, but it is not tested.
+- `POST /services/{id}/check` does not send `Cache-Control: no-store`, which the removed route did. That is unchanged and not looked at here.
+- The logging change against the real server. Environment variables or user secrets on a machine can still change the log levels.

@@ -48,26 +48,6 @@ public class ResponseShapeTests
     }
 
     [Fact]
-    public async Task CompatibilityCheckRouteReturnsServiceFieldsAndIsNotCached()
-    {
-        await using TestApp app = new TestApp();
-        using HttpClient client = app.CreateClient();
-        await app.MigrateAsync();
-        MonitoredService service = await app.RegisterServiceAsync(client, new ServiceConfiguration("Example", "https://example.com"));
-
-        HttpResponseMessage response = await client.GetAsync($"/services/{service.Id}/check");
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.True(response.Headers.CacheControl!.NoStore);
-        JsonElement body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        string[] expectedFields = { "id", "name", "url", "status", "statusCode", "responseTimeMs", "lastCheckedAt", "failureReason" };
-        Assert.Equal(expectedFields, GetFieldNames(body));
-        Assert.Equal(service.Id, body.GetProperty("id").GetGuid());
-        Assert.Equal("Example", body.GetProperty("name").GetString());
-        Assert.Equal("UP", body.GetProperty("status").GetString());
-    }
-
-    [Fact]
     public async Task NewServiceReturnsStatusAsUnknownText()
     {
         await using TestApp app = new TestApp();
@@ -105,9 +85,6 @@ public class ResponseShapeTests
 
         JsonElement history = await client.GetFromJsonAsync<JsonElement>($"/services/{service.Id}/history");
         Assert.Equal(expectedText, history[0].GetProperty("status").GetString());
-
-        JsonElement compatibilityBody = await client.GetFromJsonAsync<JsonElement>($"/services/{service.Id}/check");
-        Assert.Equal(expectedText, compatibilityBody.GetProperty("status").GetString());
 
         JsonElement adHocBody = await client.GetFromJsonAsync<JsonElement>("/check?url=https://example.com");
         Assert.Equal(expectedText, adHocBody.GetProperty("status").GetString());

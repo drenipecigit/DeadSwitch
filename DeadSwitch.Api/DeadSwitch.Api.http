@@ -57,7 +57,3 @@ DELETE {{DeadSwitch.Api_HostAddress}}/services/{{serviceId}}
 ### Check any public URL without saving anything
 GET {{DeadSwitch.Api_HostAddress}}/check?url=https://example.com
 Accept: application/json
-
-### Compatibility route: same as the POST check above, and it also saves to the history
-GET {{DeadSwitch.Api_HostAddress}}/services/{{serviceId}}/check
-Accept: application/json
