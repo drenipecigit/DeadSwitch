@@ -141,6 +141,13 @@ Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, s
 
 ## Latest verified result
 
+Date: 2026-11-12, on `fix/startup-validation-race`.
+
+- `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
+- `dotnet test DeadSwitch.slnx`: 1561 passed, 0 failed, 0 skipped, three runs in a row on Windows. No test was added; two tests now force a fixed order. See "Startup validation before app.Run()".
+
+Earlier results:
+
 Date: 2026-11-10, on `feat/dashboard-design`.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
@@ -1398,6 +1405,7 @@ Check records saved before this rule keep their old status: an earlier 3xx stays
 - The cause of the timeouts seen in the TLS run is still unknown. The DOWN confirmation hides the false alarms but does not explain them.
 - `failedChecksInARow` is shown in the answers from `/services`, because they return the entity. It cannot be set through `POST` or `PUT`; see "Security notes".
 - `SocketsHttpHandler.ConnectTimeout` is 10 seconds, even when `TimeoutSeconds` is higher. One address that never answers can use all of it before the next address is tried.
+- `LocalOnlyCheckTests.WaitUntilStoppingAsync` accepts an `ObjectDisposedException` that only comes in one of two orders of a race. It still proves the stop through `ApplicationStopping`, but it hides the race instead of controlling it. The fix in "Startup validation before app.Run()" does not help there, because that stop happens after the server has started.
 - A host name longer than 255 characters passes `UrlSafety` and only fails at the DNS step, which gives DOWN. It should be rejected earlier.
 - `POST` ignores fields it does not know, so a misspelled `"isEnable": false` gives an enabled service. `PUT` catches this, because the real field is then missing.
 - If an unexpected kind of exception ever gets out of the probe, a manual check gives 500 and the worker logs the error and tries again on every pass, because the service stays due. None is known now.
@@ -1771,3 +1779,43 @@ Not proven until it has run on GitHub:
 - That 15 minutes is enough.
 - That the token can only read. The log shows this under "GITHUB_TOKEN Permissions".
 - That the telemetry is turned off. The text test only proves that the line exists.
+
+## Startup validation before app.Run()
+
+Built on `fix/startup-validation-race`, on 2026-11-12.
+
+**The problem.** `SecurityWarningSettingsTests.InvalidSettingStopsTheApplicationWithAFixedText` failed once in three GitHub Actions runs on the same commit, with `ObjectDisposedException: 'IServiceProvider'` instead of `OptionsValidationException`. `WebApplicationFactory` runs `Program.cs` on a thread of its own, and that thread keeps going after `builder.Build()` while the test host starts the application. A bad `SecurityWarnings:CertificateWarningDays` failed inside `app.Run()`, where `RunAsync` disposes the host before the exception leaves `Main`. When that came first, the test host read a disposed service provider.
+
+**The red test.** `TestApp` got `WaitForProgramBeforeStart`. When it is set, `CreateHost` first checks that the thread of `Program` was captured and is not the test's own thread, then waits for that thread to end with `Thread.Join` (10 seconds only as a limit against a hanging test), and only then starts the host. This forces the bad order every time. Both startup failure tests set the flag.
+
+| Run | Before (on `main`) | Forced order, no fix | Forced order, with fix |
+|---|---|---|---|
+| Both test classes (24 tests), 20 times | 20 of 20 green | Run twice (red test and mutation), not 20 times. Both times the 3 `SecurityWarningSettingsTests` cases red with `ObjectDisposedException` from `DeferredHost.StartAsync`, 21 green | 20 of 20 green |
+| Whole suite (1561 tests), 3 times | 3 of 3 green | not run | 3 of 3 green |
+
+`DiscordConfigurationTests.InvalidAddressStopsTheApplicationWithAFixedText` stayed green with the forced order even before the fix. `Program.cs` reads `IOptions<DiscordOptions>.Value` before `app.Run()`, and that runs the Discord validation, so a bad address never reached `RunAsync`.
+
+**The fix.** One line directly after `builder.Build()`: `app.Services.GetRequiredService<IStartupValidator>().Validate();`. It runs exactly the checks that `ValidateOnStart` registered, so a new options class with `ValidateOnStart` is covered without a list to keep up to date. `ValidateOnStart` stays. A bad setting now leaves `Main` before the host is disposed and before anything is written to the log.
+
+**Mutation.** With the line removed, the three `SecurityWarningSettingsTests` cases were red again with the same exception, and the Discord cases green. With the line back, all green, and the diff of `Program.cs` held only the fix.
+
+**Behaviour that changed:**
+
+- The log lines "Discord notifications are turned on/off" and "Hosting failed to start" are not written when the start fails. The unhandled exception with the fixed text is still written by the runtime.
+- If both the Discord address and another setting are wrong, the error is now an `AggregateException` with both, as `ValidateOnStart` already gave. Before, only the Discord error was shown. No test covers this.
+
+Not proven:
+
+- The internals of the test host in version 10.0.12 were not read. The red and green runs show the behaviour, not the code.
+- That this exact order caused the failed run on GitHub. It is concluded from the stack.
+- Nothing of this has run on Linux.
+
+**Manual run** by the owner, with `SecurityWarnings:CertificateWarningDays` set to `0` and `dotnet run --launch-profile http`, on Windows:
+
+| | Before the fix (`main`) | After the fix |
+|---|---|---|
+| `info: ... Discord notifications are turned on.` | written | not written |
+| `fail: Microsoft.Extensions.Hosting.Internal.Host[11] Hosting failed to start` | written | not written |
+| `Unhandled exception. Microsoft.Extensions.Options.OptionsValidationException: CertificateWarningDays must be between 1 and 365.` | written | written, same text |
+| Stack | `StartupValidator.Validate` → `Host.StartAsync` → `RunAsync` → `Run` → `Program.cs` line 153 | `StartupValidator.Validate` from `Program.cs` line 119 |
+| Exit code | `-532462766` | `-532462766` |

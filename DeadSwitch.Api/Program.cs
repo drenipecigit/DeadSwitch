@@ -113,6 +113,11 @@ builder.Services.AddHostedService<MonitoringWorker>();
 
 WebApplication app = builder.Build();
 
+// Runs the same checks as ValidateOnStart, but before app.Run(). A bad setting then stops the
+// application before the host is disposed, so a test host that starts the application never
+// sees a disposed service provider. It also stops before anything is written to the log.
+app.Services.GetRequiredService<IStartupValidator>().Validate();
+
 DiscordOptions discordOptions = app.Services.GetRequiredService<IOptions<DiscordOptions>>().Value;
 if (string.IsNullOrEmpty(discordOptions.WebhookUrl))
 {

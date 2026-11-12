@@ -35,6 +35,7 @@ public class DiscordConfigurationTests
     {
         StubDiscordHandler stub = new StubDiscordHandler();
         await using TestApp app = new TestApp("Development", webhookUrl, stub);
+        app.WaitForProgramBeforeStart = true;
 
         // Reading Services is what starts the application.
         OptionsValidationException exception = Assert.Throws<OptionsValidationException>(() => app.Services);

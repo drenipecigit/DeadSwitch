@@ -50,6 +50,13 @@ internal sealed class TestApp : WebApplicationFactory<Program>
     // Finished when the application starts to stop. Only used together with PretendedAddress.
     public TaskCompletionSource ApplicationStopping { get; } = new TaskCompletionSource();
 
+    // When true, the test host waits until Program.cs has finished before it starts the application.
+    // Only for tests where the application must fail at startup, because otherwise Program never ends.
+    public bool WaitForProgramBeforeStart { get; set; }
+
+    // The thread that runs Program.cs. The test host starts Program on a thread of its own.
+    public Thread? ProgramThread { get; private set; }
+
     // The address the application reads. It is empty unless a test asks for the real notifier.
     private readonly string _webhookUrl = "";
 
@@ -96,6 +103,9 @@ internal sealed class TestApp : WebApplicationFactory<Program>
 
         builder.ConfigureServices(services =>
         {
+            // This runs inside builder.Build() in Program.cs, so it runs on the thread of Program.
+            ProgramThread = Thread.CurrentThread;
+
             // Remove the real database registration, so no test can touch the real database file.
             services.RemoveAll<DbContextOptions<DeadSwitchDbContext>>();
             services.RemoveAll<IDbContextOptionsConfiguration<DeadSwitchDbContext>>();
@@ -125,6 +135,36 @@ internal sealed class TestApp : WebApplicationFactory<Program>
                 services.AddHostedService(CreatePretendedAddress);
             }
         });
+    }
+
+    // Program.cs keeps running on its own thread after the host is built, at the same time as the test
+    // host starts it. Waiting for that thread to end forces one fixed order: the application has done
+    // everything it does on a failed start before the test host goes on. A test then gets the same
+    // result every time instead of the result of a race.
+    protected override IHost CreateHost(IHostBuilder builder)
+    {
+        if (!WaitForProgramBeforeStart)
+        {
+            return base.CreateHost(builder);
+        }
+
+        IHost host = builder.Build();
+
+        // If the thread is missing or is the test's own thread, Join waits for nothing and proves nothing.
+        if (ProgramThread == null || ProgramThread == Thread.CurrentThread)
+        {
+            throw new InvalidOperationException("ProgramThread was not captured on the Program thread, so Join proves nothing.");
+        }
+
+        // The limit is only there so that a bug gives a red test instead of a test that hangs.
+        bool finished = ProgramThread.Join(TimeSpan.FromSeconds(10));
+        if (!finished)
+        {
+            throw new InvalidOperationException("Program did not finish within 10 seconds.");
+        }
+
+        host.Start();
+        return host;
     }
 
     private PretendedServerAddress CreatePretendedAddress(IServiceProvider provider)

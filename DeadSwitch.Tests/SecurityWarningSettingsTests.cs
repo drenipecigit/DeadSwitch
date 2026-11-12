@@ -38,6 +38,7 @@ public class SecurityWarningSettingsTests
     {
         await using TestApp app = new TestApp();
         app.CertificateWarningDaysSetting = value;
+        app.WaitForProgramBeforeStart = true;
 
         // Reading Services is what starts the application.
         OptionsValidationException exception = Assert.Throws<OptionsValidationException>(() => app.Services);
