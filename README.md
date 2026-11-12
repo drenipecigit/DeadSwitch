@@ -8,9 +8,9 @@ This version is made to run on your own computer only. It has no login, on purpo
 
 ## What it does
 
-- **Health checks.** One `GET` request per check. A service is `UP`, `DOWN` or `UNKNOWN`. A timeout, a failed connection and an HTTP 4xx or 5xx are `DOWN`. `UNKNOWN` means that no request was sent, because the address was blocked.
+- **Health checks.** One `GET` request per check. A service is `UP`, `DOWN` or `UNKNOWN`. A timeout, a failed connection and an HTTP 4xx or 5xx are `DOWN`. `UNKNOWN` means that there is no result yet: the service has not been checked, or no request was sent because the address was blocked.
 - **History.** Every check is saved with its time, status code, response time and failure reason.
-- **Notifications.** One Discord message when a service goes from UP to DOWN or from DOWN to UP, never one per check. DOWN is only reported after 2 failed checks in a row, so a single timeout gives no message.
+- **Notifications.** One Discord message when a service is confirmed DOWN, also when a new service is confirmed DOWN for the first time, and one when it comes back UP, never one per check. DOWN is only reported after 2 failed checks in a row, so a single timeout gives no message. Security warnings, described below, are also sent to Discord.
 - **Security checks,** from the same request as the health check:
   - The five security headers `Strict-Transport-Security`, `Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options` and `Referrer-Policy`, with a grade from A to F. The grade says how many are present, not whether their values are good.
   - The expiry date of the TLS certificate, with a warning when 14 days or fewer are left (configurable), and again at 7 days and at 1 day.
@@ -87,7 +87,7 @@ No test reaches a real website or Discord. HTTP in the tests goes to local serve
 
 ### What the API lets a caller do
 
-The whole point of the application is to make this computer send requests to addresses that someone else has typed in. Anyone who can call the API can register addresses, start checks, and read, change and delete every service. There is no login. Everything below exists to limit who can call the API, and what a request from it can reach.
+The whole point of the application is to make this computer send requests to addresses that someone else has typed in. Anyone who can call the API can register addresses, start checks, and read, change and delete every service. A check of a registered service can also send a message to the Discord channel. There is no login. Everything below exists to limit who can call the API, and what a request from it can reach.
 
 ### Locked to your own computer
 
