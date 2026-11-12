@@ -1,0 +1,41 @@
+name: Build and test
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# The workflow only needs to read the code. Nothing is written back to the repository.
+permissions:
+  contents: read
+
+# Stops the .NET CLI from sending usage data from the runner. It does not affect any test.
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The token is not kept in .git/config, so later steps cannot use it.
+          persist-credentials: false
+
+      - name: Install the .NET SDK
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          # The same SDK as on the development machine. Update this when the local SDK is updated.
+          dotnet-version: '10.0.301'
+
+      - name: Restore
+        run: dotnet restore DeadSwitch.slnx
+
+      - name: Build
+        run: dotnet build DeadSwitch.slnx --no-restore
+
+      - name: Test
+        run: dotnet test DeadSwitch.slnx --no-build

@@ -1,6 +1,6 @@
 # DeadSwitch progress
 
-Updated: 2026-11-10.
+Updated: 2026-11-12.
 
 DeadSwitch is a personal uptime monitor. The backend is **not finished**: see the MVP status below.
 
@@ -1287,7 +1287,7 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | Warnings when security gets worse | Done | Proven by tests with a fake probe, a fake notifier and a stub. Manual test passed on 2026-11-09; see "Not run manually" |
 | Redirect target saved per check, with a warning when it moves to another domain (phase 3 task 4, not part of the MVP) | Done | Proven by tests with a fake probe, a fake notifier, a stub and a local raw server. Manual test passed on 2026-11-10 for `OTHER_HOST`; `INTERNAL_TARGET` and `UNREADABLE` are proven by tests only. See "Not run manually" |
 | README | Missing | |
-| GitHub Actions | Missing | Waits for the owner's approval |
+| GitHub Actions | Partial | The workflow file and its text tests exist on `ci/github-actions`. It has never run on GitHub, and no test has ever run on Linux. See "Phase 4, first part: GitHub Actions" |
 
 ## Notification rules
 
@@ -1587,7 +1587,7 @@ DeadSwitch is growing into a tool that watches both the availability and the sec
 
 The phases are done in the order below: 1, 2, 5, 3, 4, 6. The dashboard comes early so that every new feature is visible in it at once. The MVP still covers phases 1 to 4; the dashboard is built earlier but is not part of the MVP. Each task is one branch, with a plan approved first.
 
-**Next step:** `feat/dashboard-design` is built and proven by tests. The owner runs the manual test, then reviews and merges it. The manual test of the DOWN confirmation (`fix/single-timeout`) is still to be run.
+**Next step:** `ci/github-actions` is built and its text tests pass locally. The owner reviews and merges it, and the first real run on GitHub happens after the push to `main`. Before that, `feat/dashboard-design` was built and proven by tests. The owner runs the manual test, then reviews and merges it. The manual test of the DOWN confirmation (`fix/single-timeout`) is still to be run.
 
 ### Phase 1: Stable foundation
 
@@ -1645,7 +1645,7 @@ Requirements for the tasks:
 
 ### Phase 4: DevOps
 
-- GitHub Actions: build and test on every push and pull request.
+- GitHub Actions: build and test on every push to `main`, and by hand. There is no pull request trigger, by the owner's decision. Built on `ci/github-actions`; see "Phase 4, first part: GitHub Actions".
 - Dockerfile and docker-compose, with SQLite in a volume. Until phase 6 is done, compose binds to `127.0.0.1`, because the API has no authentication before then.
 - Migrations run in a controlled way at startup, or with a documented command. The choice is proposed and justified in this phase.
 - README: what the application does, how to run it locally and in Docker, all endpoints, and the security decisions, with a screenshot of the dashboard.
@@ -1702,3 +1702,72 @@ Not proven:
 - What a GET from another site to the removed path gets. The middleware may answer 403 before routing gives 405. Either way nothing is run, but it is not tested.
 - `POST /services/{id}/check` does not send `Cache-Control: no-store`, which the removed route did. That is unchanged and not looked at here.
 - The logging change against the real server. Environment variables or user secrets on a machine can still change the log levels.
+
+## Phase 4, first part: GitHub Actions
+
+Built on `ci/github-actions`, on 2026-11-12. The text tests pass locally. **The workflow has never run on GitHub, and no test has ever run on Linux.**
+
+**The workflow** is `.github/workflows/build-and-test.yml`. It runs `dotnet restore`, `dotnet build` and `dotnet test` on `DeadSwitch.slnx`, the same commands as locally, in Debug and with no filter.
+
+| Setting | Value | Why |
+|---|---|---|
+| Triggers | Push to `main`, and `workflow_dispatch` | No pull request trigger, by the owner's decision |
+| `permissions` | `contents: read`, at the top level only | The workflow only reads the code |
+| Runner | `ubuntu-24.04` | A fixed version. `ubuntu-latest` changes without any change in the repository |
+| `timeout-minutes` | 15 | `dotnet test` took 14 seconds locally. The margin covers installing the SDK and the restore |
+| `actions/checkout` | `3d3c42e5aac5ba805825da76410c181273ba90b1`, v7.0.1 | Pinned to a full commit SHA, because a tag can be moved. `persist-credentials: false` keeps the token out of `.git/config` |
+| `actions/setup-dotnet` | `0f4a354dd5547a28c70b7853dbd95d5b67886e73`, v6.1.0 | Pinned the same way |
+| .NET SDK | `10.0.301` | There is no `global.json`. The projects target `net10.0`, and this is the SDK on the development machine. Update it in the file when the local SDK is updated |
+| `env` | `DOTNET_CLI_TELEMETRY_OPTOUT: 1` only | Stops the CLI from sending usage data from the runner. No `TZ` and no other setting is used to make tests pass |
+
+The owner fetched the SHAs with `git ls-remote` from the repositories of the `actions` organisation and compared them with the releases page.
+
+No secret and no webhook is used. No test was changed for Linux.
+
+**`WorkflowFileTests`** reads the file as text, line by line, and has 9 tests: `permissions` at the top level holds only `contents: read`, and no other `permissions` exists; no `pull_request`; every `uses:` has a full lower case commit SHA of 40 characters and a version comment; `persist-credentials: false`; `timeout-minutes`; `runs-on: ubuntu-24.04` and no `-latest`; `dotnet-version: '10.0.301'`; no `secrets.`; no `TZ`. It does not understand YAML, so a wrong indentation is not caught.
+
+Red runs, each a temporary change to the file that was then removed. Every change turned only its own test red:
+
+| Change | Red test |
+|---|---|
+| Placeholders instead of SHAs, a 7-character SHA, a SHA in upper case, no version comment, `@v4` | `EveryActionIsPinnedToAFullCommitShaWithAVersionComment` |
+| `contents: write`, an extra `actions: read`, `permissions` on the job | `PermissionsAtTopLevelOnlyAllowReadingTheCode` |
+| `pull_request:` | `ThereIsNoPullRequestTrigger` |
+| `persist-credentials: true` | `CheckoutDoesNotKeepTheToken` |
+| No `timeout-minutes` | `TheJobHasATimeout` |
+| `ubuntu-latest` | `TheRunnerVersionIsFixed` |
+| `'10.0.x'` | `TheSdkIsTheSameAsOnTheDevelopmentMachine` |
+| `${{ secrets.X }}` | `NoSecretIsUsed` |
+| `TZ: Europe/Stockholm` | `NoTimeZoneIsSet` |
+
+A control with a SHA of 40 zeros made all 9 green. The file was then compared byte for byte with the original.
+
+Result: `dotnet build DeadSwitch.slnx` 0 warnings, 0 errors. `dotnet test DeadSwitch.slnx` 1561 passed, 0 failed, 0 skipped, on Windows. Before the task 1552 passed; 9 tests were added. No package and no migration was added.
+
+Tests that use the network:
+
+- No test was found that reaches the internet. HTTP goes to local servers on `127.0.0.1`, to stubs, or through a fake DNS. This is found by reading the code and is not measured on Linux.
+- `SsrfProtectionTests.RegisteredHandlerBlocksLocalhostName` looks up `localhost` with the system's own resolver. On Ubuntu this should be answered from `/etc/hosts`, but it has not been measured.
+- The restore fetches packages from nuget.org on the runner.
+
+No test checks for Windows. These may behave differently on Linux, and none of them was changed:
+
+- The TLS tests. `TestCertificates` loads its certificate again through PKCS12 for Windows. On Linux, OpenSSL builds the chain with `CustomRootTrust`, offers HTTP/2 and gives the error flags.
+- `RedirectTargetParserTests`. `Uri.TryCreate("/a", UriKind.Absolute, ...)` can give `file:///a` on Linux, as the parser's comment says.
+- `UrlSafetyTests` with `/relative/path`. On Linux it is likely to become a `file` address and be stopped by the scheme check instead of by `TryCreate`. The test should still pass, but through another line.
+- `NextAddressIsTriedWhenFirstDoesNotAnswer` expects `127.0.0.2` to refuse the connection. The server listens on `127.0.0.1` only, so this should hold on Linux as well.
+- The runner uses UTC. A test that turns a local time into UTC then tests less than on the development machine.
+- The runner has another culture than the development machine. Not every format in the code has been checked for it.
+- Linux checks the files out with LF and the development machine with CRLF. No test was found that compares line endings in the served files.
+- Tests that wait for something, up to 10 seconds, can become flaky on a slower runner.
+- The runner has no user secrets. `TestApp` sets `Discord:WebhookUrl` itself, so this should not matter.
+
+Not proven until it has run on GitHub:
+
+- That GitHub accepts the file. `workflow_dispatch` and the push trigger only work once the file is on `main`, so the first real run comes after the merge and the push.
+- That `setup-dotnet` installs exactly 10.0.301 on `ubuntu-24.04`, and that the build has no warnings there.
+- That all tests pass on Linux.
+- That no traffic leaves the runner except for NuGet and GitHub.
+- That 15 minutes is enough.
+- That the token can only read. The log shows this under "GITHUB_TOKEN Permissions".
+- That the telemetry is turned off. The text test only proves that the line exists.
