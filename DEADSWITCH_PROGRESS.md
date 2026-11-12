@@ -141,10 +141,10 @@ Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, s
 
 ## Latest verified result
 
-Date: 2026-11-12, on `feat/finish-a`, after part 2.
+Date: 2026-11-12, on `feat/finish-a`, after part 3.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
-- `dotnet test DeadSwitch.slnx`: 1573 passed, 0 failed, 0 skipped, on Windows. See "Finish A".
+- `dotnet test DeadSwitch.slnx`: 1582 passed, 0 failed, 0 skipped, on Windows. See "Finish A".
 
 Before this, on the same day:
 
@@ -1950,3 +1950,32 @@ Not proven:
 
 - How Discord shows `<t:...:f>` in a webhook message. The tests prove what is sent. The format was written from memory of Discord's documentation, which was not read again here.
 - That the tag stays unformatted when a name holds one. The test proves that it is sent inside the code format.
+
+### Part 3: two small changes to the dashboard
+
+Only the dashboard's files and their tests changed. `index.html`, the Content Security Policy, the API and the database are untouched, and the page shows nothing new: the same four counts as before.
+
+**The grade stays beside the name on a narrow screen.** The top row of a card is a flex row that wraps. On a narrow screen the address used to wrap to a second line and take the grade with it. A media query for screens of at most 600 px now lets the name take the rest of the first line, which pushes the grade to the right edge, and gives the address `order: 1` and the whole width, so it comes after the grade on a line of its own. The order in the page is not changed, and a wider screen looks as before.
+
+**The numbers in the summary have the colour of their status.** `formatSummary` in `dashboard-logic.js` is replaced by `getSummaryParts`, which returns the count, the word and a class name for each group. The class names are the page's own: `count-up`, `count-down`, `count-pending` and `count-unknown`. `dashboard.js` builds the summary from separate pieces of text, written with `textContent` as everything else. Read as one line it is the same text as before, for example `2 UP | 1 DOWN`. Only the number is coloured, and the word is always there, so the meaning never depends on the colour. The colours are the ones the status badges already use.
+
+Tests: the three summary tests in `DashboardLogicTests` keep their names and their expected texts, and now read the parts. New: `EveryNumberInTheSummaryGetsTheClassOfItsGroup`, `TheSummaryIsEmptiedAndBuiltFromTheParts`, `EveryNumberClassHasItsColour` (4 cases) and `ANarrowScreenMovesTheAddressBelowTheNameLine`. In `TheValuesFromTheServerAreWrittenAsText` the row for the old summary line is replaced by three rows for the new calls.
+
+Red run before the change: 13 of 1582 failed. The 4 logic tests failed because the function did not exist yet, and the 9 text tests on their assertions.
+
+| Mutation | Red |
+|---|---|
+| 1. Two class names swapped in the logic | `EveryNumberInTheSummaryGetsTheClassOfItsGroup` |
+| 2. The number written without its class | `TheValuesFromTheServerAreWrittenAsText` |
+| 3. No `order` on the address | `ANarrowScreenMovesTheAddressBelowTheNameLine` |
+| 4. The wrong colour for one class | `EveryNumberClassHasItsColour` |
+| 5. One group counted as another | 3 logic tests |
+| 6. The summary not emptied before it is built | None at first. A check of that line was added to `TheSummaryIsEmptiedAndBuiltFromTheParts`, which then turned red |
+
+Result: `dotnet build DeadSwitch.slnx` 0 warnings, 0 errors. `dotnet test DeadSwitch.slnx` 1582 passed, 0 failed, 0 skipped, on Windows. Before the part 1573 passed; 9 test cases were added. No package and no migration was added.
+
+Not proven:
+
+- How the page looks. The tests of the style sheet read it as text: they prove that a rule is there, not what a browser does with it. The narrow layout, the limit of 600 px and the colours in light and dark mode are only shown by the owner's run in a browser.
+- That the summary is really emptied on every update. The test only finds the line in the script.
+- How a screen reader reads the summary now that it is several pieces of text.

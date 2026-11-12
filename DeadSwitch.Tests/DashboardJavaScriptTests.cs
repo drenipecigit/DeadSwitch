@@ -218,7 +218,9 @@ public class DashboardJavaScriptTests
     [InlineData("appendDetail(row, service.failureReason)")]
     [InlineData("appendDetail(row, certificate.text)")]
     [InlineData("details.title = certificate.title;")]
-    [InlineData("getElementById(\"summary\").textContent = formatSummary(services);")]
+    [InlineData("createText(\"span\", parts[i].className, String(parts[i].count))")]
+    [InlineData("createText(\"span\", \"summary-label\", \" \" + parts[i].label)")]
+    [InlineData("createText(\"span\", \"summary-separator\", \" | \")")]
     public async Task TheValuesFromTheServerAreWrittenAsText(string code)
     {
         string script = await ReadFileAsync(PageScript);
@@ -273,6 +275,54 @@ public class DashboardJavaScriptTests
         {
             Assert.True(char.IsAscii(character), $"The character {(int)character} is not ASCII.");
         }
+    }
+
+    // The summary is built from the parts that the logic tests prove, and from nothing else. It must be
+    // emptied first: the page updates every ten seconds, and the old text would otherwise stay in front.
+    [Fact]
+    public async Task TheSummaryIsEmptiedAndBuiltFromTheParts()
+    {
+        string script = await ReadFileAsync(PageScript);
+
+        Assert.Contains("summary.removeChild(summary.firstChild);", script);
+        Assert.Contains("const parts = getSummaryParts(services);", script);
+        Assert.Contains("showSummary(services);", script);
+    }
+
+    // Each class the logic gives a number must have a colour of its own in the style sheet. This proves
+    // that the rule is there, not how the page looks: only a browser shows that.
+    [Theory]
+    [InlineData(".count-up {\n  color: var(--up);\n}")]
+    [InlineData(".count-down {\n  color: var(--down);\n}")]
+    [InlineData(".count-pending {\n  color: var(--pending);\n}")]
+    [InlineData(".count-unknown {\n  color: var(--unknown);\n}")]
+    public async Task EveryNumberClassHasItsColour(string rule)
+    {
+        string styles = await ReadStylesAsync();
+
+        Assert.Contains(rule, styles);
+    }
+
+    // On a narrow screen the address moves below, so that the grade stays on the line of the name.
+    // This proves that the rule is there, not how the page looks: only a browser shows that.
+    [Fact]
+    public async Task ANarrowScreenMovesTheAddressBelowTheNameLine()
+    {
+        string styles = await ReadStylesAsync();
+
+        string expected =
+            "@media (max-width: 600px) {\n" +
+            "  .card-name {\n" +
+            "    flex: 1 1 0;\n" +
+            "    min-width: 0;\n" +
+            "  }\n" +
+            "\n" +
+            "  .card-url {\n" +
+            "    order: 1;\n" +
+            "    flex-basis: 100%;\n" +
+            "  }\n" +
+            "}";
+        Assert.Contains(expected, styles);
     }
 
     // A renamed field in the API would otherwise only be noticed as an empty field in the browser.
@@ -396,6 +446,13 @@ public class DashboardJavaScriptTests
         }
 
         return properties;
+    }
+
+    // The same text whether the file was checked out with Windows or Unix line endings.
+    private static async Task<string> ReadStylesAsync()
+    {
+        string styles = await ReadFileAsync("/dashboard.css");
+        return styles.Replace("\r\n", "\n");
     }
 
     private static async Task<string> ReadFileAsync(string path)

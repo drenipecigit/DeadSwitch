@@ -217,8 +217,10 @@ function twoDigits(number) {
   return String(number).padStart(2, "0");
 }
 
-// For example "2 UP | 1 DOWN | 1 waiting for confirmation". A group without services is left out.
-function formatSummary(services) {
+// The parts of the summary, which the page shows as "2 UP | 1 DOWN | 1 waiting for confirmation".
+// A group without services is left out. The class name gives the number the colour of its status, and
+// is always one of our own. The word is always there as well, so the meaning never depends on the colour.
+function getSummaryParts(services) {
   let up = 0;
   let confirmedDown = 0;
   let unconfirmedDown = 0;
@@ -241,20 +243,20 @@ function formatSummary(services) {
   const parts = [];
 
   if (up > 0) {
-    parts.push(up + " UP");
+    parts.push({ count: up, label: "UP", className: "count-up" });
   }
 
   if (confirmedDown > 0) {
-    parts.push(confirmedDown + " DOWN");
+    parts.push({ count: confirmedDown, label: "DOWN", className: "count-down" });
   }
 
   if (unconfirmedDown > 0) {
-    parts.push(unconfirmedDown + " waiting for confirmation");
+    parts.push({ count: unconfirmedDown, label: "waiting for confirmation", className: "count-pending" });
   }
 
   if (unknown > 0) {
-    parts.push(unknown + " UNKNOWN");
+    parts.push({ count: unknown, label: "UNKNOWN", className: "count-unknown" });
   }
 
-  return parts.join(" | ");
+  return parts;
 }

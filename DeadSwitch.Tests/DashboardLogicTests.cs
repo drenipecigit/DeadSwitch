@@ -369,9 +369,33 @@ public class DashboardLogicTests
             CreateService(engine, "d", "DOWN", null),
             CreateService(engine, "e", "UNKNOWN", "UP"));
 
-        JsValue summary = engine.Invoke("formatSummary", services);
+        JsValue parts = engine.Invoke("getSummaryParts", services);
 
-        Assert.Equal("2 UP | 1 DOWN | 1 waiting for confirmation | 1 UNKNOWN", summary.AsString());
+        Assert.Equal("2 UP | 1 DOWN | 1 waiting for confirmation | 1 UNKNOWN", JoinSummary(parts));
+    }
+
+    // The number gets the colour of its status. The class name is always one of the page's own.
+    [Fact]
+    public async Task EveryNumberInTheSummaryGetsTheClassOfItsGroup()
+    {
+        Engine engine = await LoadLogicAsync();
+        JsArray services = CreateList(engine,
+            CreateService(engine, "a", "UP", "UP"),
+            CreateService(engine, "b", "DOWN", "DOWN"),
+            CreateService(engine, "c", "DOWN", null),
+            CreateService(engine, "d", "UNKNOWN", "UP"));
+
+        JsArray parts = (JsArray)engine.Invoke("getSummaryParts", services);
+
+        Assert.Equal(4u, parts.Length);
+        Assert.Equal("count-up", ReadText(parts[0], "className"));
+        Assert.Equal("UP", ReadText(parts[0], "label"));
+        Assert.Equal("count-down", ReadText(parts[1], "className"));
+        Assert.Equal("DOWN", ReadText(parts[1], "label"));
+        Assert.Equal("count-pending", ReadText(parts[2], "className"));
+        Assert.Equal("waiting for confirmation", ReadText(parts[2], "label"));
+        Assert.Equal("count-unknown", ReadText(parts[3], "className"));
+        Assert.Equal("UNKNOWN", ReadText(parts[3], "label"));
     }
 
     [Fact]
@@ -382,9 +406,9 @@ public class DashboardLogicTests
             CreateService(engine, "a", "UP", "UP"),
             CreateService(engine, "b", "DOWN", "UP"));
 
-        JsValue summary = engine.Invoke("formatSummary", services);
+        JsValue parts = engine.Invoke("getSummaryParts", services);
 
-        Assert.Equal("1 UP | 1 waiting for confirmation", summary.AsString());
+        Assert.Equal("1 UP | 1 waiting for confirmation", JoinSummary(parts));
     }
 
     [Fact]
@@ -393,9 +417,9 @@ public class DashboardLogicTests
         Engine engine = await LoadLogicAsync();
         JsArray services = CreateList(engine);
 
-        JsValue summary = engine.Invoke("formatSummary", services);
+        JsValue parts = engine.Invoke("getSummaryParts", services);
 
-        Assert.Equal("", summary.AsString());
+        Assert.Equal("", JoinSummary(parts));
     }
 
     // The script compares with the server's own text. If the text in Domain changed, an invalid
@@ -488,6 +512,21 @@ public class DashboardLogicTests
         }
 
         return names;
+    }
+
+    // Puts the parts together the way the page does: the number, a space, the word, and " | " between.
+    private static string JoinSummary(JsValue summaryParts)
+    {
+        JsArray parts = (JsArray)summaryParts;
+        List<string> texts = new List<string>();
+
+        for (uint i = 0; i < parts.Length; i++)
+        {
+            int count = (int)parts[i].AsObject().Get("count").AsNumber();
+            texts.Add(count + " " + ReadText(parts[i], "label"));
+        }
+
+        return string.Join(" | ", texts);
     }
 
     // Null when the field is JavaScript null, so that a test can compare with null directly.

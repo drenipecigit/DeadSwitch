@@ -81,6 +81,24 @@ h1 {
   font-weight: 700;
 }
 
+/* A number in the summary has the colour of its status. The word after it is always there as well,
+   so that the meaning never depends on seeing the colour. */
+.count-up {
+  color: var(--up);
+}
+
+.count-down {
+  color: var(--down);
+}
+
+.count-pending {
+  color: var(--pending);
+}
+
+.count-unknown {
+  color: var(--unknown);
+}
+
 .no-services {
   margin: 0 0 16px;
   color: var(--muted);
@@ -220,4 +238,19 @@ h1 {
 
 .stale {
   opacity: 0.55;
+}
+
+/* On a narrow screen the address moves to a line of its own, so that the grade stays beside the name.
+   The name takes the rest of the line, which pushes the grade to the right edge. order: 1 puts the
+   address after the grade without changing the order in the page. */
+@media (max-width: 600px) {
+  .card-name {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .card-url {
+    order: 1;
+    flex-basis: 100%;
+  }
 }

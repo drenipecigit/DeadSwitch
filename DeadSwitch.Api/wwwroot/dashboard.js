@@ -61,8 +61,29 @@ function showServices(services) {
     list.appendChild(createCard(sorted[i]));
   }
 
-  document.getElementById("summary").textContent = formatSummary(services);
+  showSummary(services);
   document.getElementById("no-services").hidden = services.length > 0;
+}
+
+// Built from separate pieces of text, so that each number can carry the colour of its status.
+// Read as one line it is the same text as before: "2 UP | 1 DOWN".
+function showSummary(services) {
+  const summary = document.getElementById("summary");
+
+  while (summary.firstChild) {
+    summary.removeChild(summary.firstChild);
+  }
+
+  const parts = getSummaryParts(services);
+
+  for (let i = 0; i < parts.length; i++) {
+    if (i > 0) {
+      summary.appendChild(createText("span", "summary-separator", " | "));
+    }
+
+    summary.appendChild(createText("span", parts[i].className, String(parts[i].count)));
+    summary.appendChild(createText("span", "summary-label", " " + parts[i].label));
+  }
 }
 
 function createCard(service) {
