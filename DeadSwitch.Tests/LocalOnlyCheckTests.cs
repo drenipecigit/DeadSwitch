@@ -53,8 +53,9 @@ public class LocalOnlyCheckTests
 
         try
         {
-            await WaitUntilStoppingAsync(app);
+            StartAndWaitUntilProgramHasEnded(app);
 
+            Assert.True(app.ApplicationStopping.Task.IsCompleted);
             Assert.Equal(1, Environment.ExitCode);
             Assert.True(app.Logs.Contains(LogLevel.Critical, address));
         }
@@ -84,19 +85,19 @@ public class LocalOnlyCheckTests
         Assert.False(app.Logs.Contains(LogLevel.Critical, address));
     }
 
-    private static async Task WaitUntilStoppingAsync(TestApp app)
+    // The application stops itself and then disposes its services. PretendedServerAddress holds that
+    // back until TestHostStarted is set, so reading Services always finds them alive.
+    private static void StartAndWaitUntilProgramHasEnded(TestApp app)
     {
-        try
-        {
-            // Reading Services is what starts the application.
-            _ = app.Services;
-        }
-        catch (ObjectDisposedException)
-        {
-            // The check can stop the application before the test host has finished starting it.
-        }
+        // Reading Services is what starts the application.
+        _ = app.Services;
+        app.TestHostStarted.SetResult();
+        Assert.NotNull(app.ProgramThread);
 
-        // The limit is only there so that a bug gives a red test instead of a test that hangs.
-        await app.ApplicationStopping.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        // Waiting for Program to end means that TestApp is never disposed while the application is
+        // still stopping itself. The limit is only there so that a bug gives a red test instead of a
+        // test that hangs.
+        bool finished = app.ProgramThread.Join(TimeSpan.FromSeconds(10));
+        Assert.True(finished);
     }
 }

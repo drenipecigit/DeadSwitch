@@ -50,6 +50,10 @@ internal sealed class TestApp : WebApplicationFactory<Program>
     // Finished when the application starts to stop. Only used together with PretendedAddress.
     public TaskCompletionSource ApplicationStopping { get; } = new TaskCompletionSource();
 
+    // Program waits for this before it finishes stopping, so the test host never reads a disposed
+    // service provider. Only used together with PretendedAddress.
+    public TaskCompletionSource TestHostStarted { get; } = new TaskCompletionSource();
+
     // When true, the test host waits until Program.cs has finished before it starts the application.
     // Only for tests where the application must fail at startup, because otherwise Program never ends.
     public bool WaitForProgramBeforeStart { get; set; }
@@ -171,7 +175,7 @@ internal sealed class TestApp : WebApplicationFactory<Program>
     {
         IServer server = provider.GetRequiredService<IServer>();
         IHostApplicationLifetime lifetime = provider.GetRequiredService<IHostApplicationLifetime>();
-        return new PretendedServerAddress(server, lifetime, PretendedAddress!, ApplicationStopping);
+        return new PretendedServerAddress(server, lifetime, PretendedAddress!, ApplicationStopping, TestHostStarted);
     }
 
     // Development reads user secrets, so the tests would otherwise see the owner's real webhook address.
@@ -267,6 +271,10 @@ internal sealed class TestApp : WebApplicationFactory<Program>
 
     public override async ValueTask DisposeAsync()
     {
+        // A test that never gives the signal, or fails before it does, must not make the
+        // application wait when it stops.
+        TestHostStarted.TrySetResult();
+
         await base.DisposeAsync();
         await _keeper.DisposeAsync();
     }

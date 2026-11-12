@@ -141,6 +141,13 @@ Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, s
 
 ## Latest verified result
 
+Date: 2026-11-12, on `fix/local-only-check-race`.
+
+- `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
+- `dotnet test DeadSwitch.slnx`: 1561 passed, 0 failed, 0 skipped, three runs in a row on Windows. `LocalOnlyCheckTests`: 20 of 20 runs green. No test was added; the local-only check tests now wait for a fixed order instead of catching an exception. See "Local-only check tests without a hidden race".
+
+Before this, on the same day:
+
 Date: 2026-11-12, on `fix/startup-validation-race`.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
@@ -1405,7 +1412,7 @@ Check records saved before this rule keep their old status: an earlier 3xx stays
 - The cause of the timeouts seen in the TLS run is still unknown. The DOWN confirmation hides the false alarms but does not explain them.
 - `failedChecksInARow` is shown in the answers from `/services`, because they return the entity. It cannot be set through `POST` or `PUT`; see "Security notes".
 - `SocketsHttpHandler.ConnectTimeout` is 10 seconds, even when `TimeoutSeconds` is higher. One address that never answers can use all of it before the next address is tried.
-- `LocalOnlyCheckTests.WaitUntilStoppingAsync` accepts an `ObjectDisposedException` that only comes in one of two orders of a race. It still proves the stop through `ApplicationStopping`, but it hides the race instead of controlling it. The fix in "Startup validation before app.Run()" does not help there, because that stop happens after the server has started.
+- The local-only check tests hold the application's own stop back with a signal in the test host. Only the order where the application has stopped completely before the test host starts is forced by a test. An order where the test host fails after it has started is covered by the same signal, but no test forces it. See "Local-only check tests without a hidden race".
 - A host name longer than 255 characters passes `UrlSafety` and only fails at the DNS step, which gives DOWN. It should be rejected earlier.
 - `POST` ignores fields it does not know, so a misspelled `"isEnable": false` gives an enabled service. `PUT` catches this, because the real field is then missing.
 - If an unexpected kind of exception ever gets out of the probe, a manual check gives 500 and the worker logs the error and tries again on every pass, because the service stays due. None is known now.
@@ -1819,3 +1826,34 @@ Not proven:
 | `Unhandled exception. Microsoft.Extensions.Options.OptionsValidationException: CertificateWarningDays must be between 1 and 365.` | written | written, same text |
 | Stack | `StartupValidator.Validate` → `Host.StartAsync` → `RunAsync` → `Run` → `Program.cs` line 153 | `StartupValidator.Validate` from `Program.cs` line 119 |
 | Exit code | `-532462766` | `-532462766` |
+
+## Local-only check tests without a hidden race
+
+Built on `fix/local-only-check-race`, on 2026-11-12. Only test code changed. The real application behaves as before: the same critical log line and exit code 1.
+
+**The problem.** `LocalOnlyCheckTests.AnAddressOnTheNetworkStopsTheApplication` caught `ObjectDisposedException` when it started the application. The check in `LocalOnlyCheck.StopIfListeningBeyondLoopback` stops the application from `ApplicationStarted`, and `RunAsync` then disposes the host on the thread of `Program`. If that came before the test host had read its services, the test host read a disposed service provider. The catch hid that order instead of controlling it. Validating before `app.Run()` does not help here, because this stop can only happen after the server has started and its addresses are known.
+
+**The red test.** With the catch removed and `WaitForProgramBeforeStart` set, the thread of `Program` has ended before the test host starts. All three cases were red with `ObjectDisposedException` from `DeferredHost.StartAsync`, every time.
+
+**The fix.** `PretendedServerAddress.StopAsync` waits for `TestApp.TestHostStarted` before the application goes on to dispose. The test reads `Services`, sets the signal, and waits with `Thread.Join` until `Program` has ended. Then it checks that `ApplicationStopping` happened, that the exit code is 1 and that the critical line was logged. `TestApp.DisposeAsync` sets the signal too, so a test that never sets it does not wait. The wait in `StopAsync` has a limit of 30 seconds, only against a hang.
+
+A change in `Program.cs` was rejected. Returning without disposing the host would keep the services alive, but the console log might then not be written out before the process ends.
+
+| Run | Before (on `main`) | Forced order, no fix | With the fix |
+|---|---|---|---|
+| `LocalOnlyCheckTests` (26 tests), 20 times | 20 of 20 green (the catch hid the race) | 1 run: 3 red, 23 green | 20 of 20 green, every stopping case under 250 ms |
+| Whole suite (1561 tests), 3 times | 3 of 3 green | not run | 3 of 3 green |
+
+**Mutation.**
+
+- Without the wait in `StopAsync`, and with the forced order: 3 red with `ObjectDisposedException` from `DeferredHost.StartAsync`.
+- With the wait and the forced order: 3 red with "Program did not finish within 10 seconds." after 10 seconds each. This shows that `Program` cannot end before the test host has started.
+
+No case took near 30 seconds and no `TimeoutException` was seen, so the wait does not lock the test host.
+
+Not proven:
+
+- The internals of the test host in version 10.0.12 were not read.
+- Only the order where `Program` has ended before the test host starts is forced. An order where the test host fails after its start, when it asks for the server, follows from the reasoning and is covered by the same signal, but no test forces it.
+- How often the catch was hit before. It left no trace.
+- Nothing of this has run on Linux.
