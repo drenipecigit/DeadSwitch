@@ -359,6 +359,63 @@ public class ServiceCheckTests
         Assert.Equal(0, locks.ActiveCount);
     }
 
+    // The answer describes one moment, so a browser or a proxy must never keep it and show it again.
+    [Fact]
+    public async Task ManualCheckAnswerIsNotStored()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService service = await app.RegisterServiceAsync(client, new ServiceConfiguration("Example", "https://example.com"));
+
+        HttpResponseMessage check = await client.PostAsync($"/services/{service.Id}/check", null);
+
+        Assert.Equal(HttpStatusCode.OK, check.StatusCode);
+        Assert.NotNull(check.Headers.CacheControl);
+        Assert.True(check.Headers.CacheControl.NoStore);
+    }
+
+    [Fact]
+    public async Task ManualCheckOfMissingServiceIsNotStored()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+
+        HttpResponseMessage check = await client.PostAsync($"/services/{Guid.NewGuid()}/check", null);
+
+        Assert.Equal(HttpStatusCode.NotFound, check.StatusCode);
+        Assert.NotNull(check.Headers.CacheControl);
+        Assert.True(check.Headers.CacheControl.NoStore);
+    }
+
+    // The 409 is written by the error translation after the endpoint has thrown. The header must already
+    // be set by then.
+    [Fact]
+    public async Task OverlappingCheckAnswerIsNotStored()
+    {
+        await using TestApp app = new TestApp();
+        using HttpClient client = app.CreateClient();
+        await app.MigrateAsync();
+        MonitoredService service = await app.RegisterServiceAsync(client, new ServiceConfiguration("Example", "https://example.com"));
+        await using AsyncServiceScope scope = app.Services.CreateAsyncScope();
+        MonitoredServiceService services = scope.ServiceProvider.GetRequiredService<MonitoredServiceService>();
+        using CancellationTokenSource cancellation = new CancellationTokenSource();
+        TaskCompletionSource started = HangProbeUntilCancelled(app.Probe);
+
+        Task<CheckRecord?> firstCheck = services.CheckAsync(service.Id, ct: cancellation.Token);
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        HttpResponseMessage secondCheck = await client.PostAsync($"/services/{service.Id}/check", null);
+
+        Assert.Equal(HttpStatusCode.Conflict, secondCheck.StatusCode);
+        Assert.NotNull(secondCheck.Headers.CacheControl);
+        Assert.True(secondCheck.Headers.CacheControl.NoStore);
+
+        // Let the hanging check finish, so it does not outlive the test.
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => firstCheck);
+    }
+
     // Every check needs its own scope, because a DbContext must not be used by two checks at once.
     private static async Task CheckInOwnScopeAsync(TestApp app, Guid id, CancellationToken cancellationToken)
     {

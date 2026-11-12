@@ -79,6 +79,9 @@ public static class DiscordWebhookUrl
     {
         foreach (char character in text)
         {
+            // The space (0x20) and everything below it are the space and the control characters.
+            // Everything above '~' (0x7E) is DEL (0x7F) and every character outside ASCII.
+            // What is left is the visible ASCII characters, 0x21 to 0x7E.
             if (character <= ' ' || character > '~')
             {
                 return false;

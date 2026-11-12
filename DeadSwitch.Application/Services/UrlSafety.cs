@@ -82,6 +82,11 @@ public static class UrlSafety
             return null;
         }
 
+        // Security: Unknown means that Uri could not say what kind of host this is, and a host that
+        // cannot be classified must not be judged as a name. No address is known to reach this line:
+        // every odd form that was tried is either refused by Uri.TryCreate above or given another
+        // type, and the tests stay green without the check. It is kept on purpose, so that the
+        // protection does not depend on how Uri happens to work.
         if (uri.HostNameType == UriHostNameType.Unknown)
         {
             return null;

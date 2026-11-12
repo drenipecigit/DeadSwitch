@@ -94,8 +94,12 @@ public static class ServiceEndpoints
         return Results.NoContent();
     }
 
-    private static async Task<IResult> CheckServiceAsync(Guid id, MonitoredServiceService monitoring, CancellationToken ct)
+    private static async Task<IResult> CheckServiceAsync(Guid id, MonitoredServiceService monitoring, HttpContext context, CancellationToken ct)
     {
+        // The answer describes one moment, so nothing may keep it and show it again. Set first, so that
+        // it is also there on a 404 and on the 409 that the error translation writes afterwards.
+        context.Response.Headers.CacheControl = "no-store";
+
         CheckRecord? record = await monitoring.CheckAsync(id, ct: ct);
         if (record == null)
         {

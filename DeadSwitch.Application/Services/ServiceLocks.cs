@@ -1,6 +1,7 @@
 namespace DeadSwitch.Application.Services;
 
-// Stops the API and the worker from working on the same service at the same time.
+// Stops two callers from working on the same service at the same time: a check, from the API or
+// the worker, an update or a delete.
 // Registered as a singleton, so everyone shares the same locks. They only work within one process.
 //
 // Every service has its own lock, and the lock only exists while someone holds or waits for it.
@@ -26,7 +27,8 @@ public sealed class ServiceLocks
         }
     }
 
-    // Waits until the lock is free. The caller must call Release when done.
+    // Waits until the lock is free. The caller must call Release when done. If the wait is cancelled,
+    // the lock was never taken, and Release must not be called.
     public async Task EnterAsync(Guid id, CancellationToken ct)
     {
         LockEntry? entry;
@@ -108,9 +110,10 @@ public sealed class ServiceLocks
     private sealed class LockEntry
     {
         // SemaphoreSlim instead of the lock keyword, because lock cannot be held across an await.
-        // It is not disposed, because it only needs that if AvailableWaitHandle is used. Disposing
-        // it could also fail: Release can be on its way to call Gate.Release while the last waiter
-        // cancels and removes the entry.
+        // It is not disposed. This class never uses AvailableWaitHandle, which is the part of a
+        // SemaphoreSlim that needs disposing. Disposing it when the entry is removed would also be
+        // unsafe: Release can be on its way to call Gate.Release while the last waiter cancels and
+        // removes the entry, and Gate.Release on a disposed semaphore throws.
         public SemaphoreSlim Gate { get; }
 
         // How many callers hold or wait for this lock. Only changed inside lock (_sync).

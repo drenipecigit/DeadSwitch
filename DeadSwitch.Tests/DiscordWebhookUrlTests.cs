@@ -49,6 +49,8 @@ public class DiscordWebhookUrlTests
     [InlineData("https://discord.com/api/webhooks/123/to ken")]
     [InlineData("https://discord.com/api/webhooks/123/token\n")]
     [InlineData("https://discord.com/api/webhooks/123/tok\ten")]
+    // DEL, the one ASCII character above '~'
+    [InlineData("https://discord.com/api/webhooks/123/tok\u007Fen")]
     // Characters outside ASCII: the fullwidth d, and a soft hyphen
     [InlineData("https://ｄiscord.com/api/webhooks/123/token")]
     [InlineData("https://discord.com/api/webhooks/123/tok­en")]

@@ -28,7 +28,7 @@ DeadSwitch is a personal uptime monitor. The backend is **not finished**: see th
 | `GET /services/{id}` | Get one service |
 | `PUT /services/{id}` | Replace a service's configuration; every field is required |
 | `DELETE /services/{id}` | Delete a service and its history |
-| `POST /services/{id}/check` | Manual check, saved to the history |
+| `POST /services/{id}/check` | Manual check, saved to the history. Answers with `Cache-Control: no-store` |
 | `GET /services/{id}/history?skip=&take=` | Check history, newest first; `take` is 1 to 200 |
 | `GET /check?url=` | Check a public URL without saving anything |
 
@@ -140,6 +140,13 @@ Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, s
 `fix/api-contract` needed no migration. Marking a time read from the database as UTC does not change the column or the saved text. This is proven by `ModelMatchesTheMigrations`, by `dotnet ef migrations has-pending-model-changes`, by no change in the `Migrations` folder, and by tests that read the saved text directly.
 
 ## Latest verified result
+
+Date: 2026-11-12, on `feat/finish-a`, after part 1.
+
+- `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
+- `dotnet test DeadSwitch.slnx`: 1565 passed, 0 failed, 0 skipped, on Windows. See "Finish A".
+
+Before this, on the same day:
 
 Date: 2026-11-12, on `fix/local-only-check-race`.
 
@@ -1471,6 +1478,7 @@ These parts do not yet follow the project's plain style, on purpose:
 - The queries in the repository stay as LINQ, because EF Core translates them to SQL.
 - `UtcDateTimeOffsetConverter` is a class with an abstract `Read` method that no request uses, because `System.Text.Json` has no setting for the time format.
 - `UrlSafety.GetConnectionHost` uses `try`/`catch` and returns null. `Uri.IdnHost` has no version that avoids the exception, and a host that cannot be converted must be rejected.
+- `UrlSafety.ParseAllowedForm` keeps the check of `UriHostNameType.Unknown`, although no address is known to reach it and the tests stay green without it. The protection must not depend on how `Uri` happens to work. See "Finish A".
 - `ExpectedErrors.TranslateAsync` checks for 415 after the next middleware instead of catching an exception, because the framework throws nothing for a wrong content type.
 - `DiscordWebhookUrl.IsAllowed` has many separate checks, some of which overlap. They are kept on purpose: the protection must not depend on how the other checks happen to work. The mutation check shows that removing the ASCII check changes no test.
 - `ValidateOnStart` is kept for Discord although the startup line reads the options anyway, for the same reason.
@@ -1857,3 +1865,36 @@ Not proven:
 - Only the order where `Program` has ended before the test host starts is forced. An order where the test host fails after its start, when it asks for the server, follows from the reasoning and is covered by the same signal, but no test forces it.
 - How often the catch was hit before. It left no trace.
 - Nothing of this has run on Linux.
+
+## Finish A
+
+Built on `feat/finish-a`, on 2026-11-12. Four parts, one commit each. This section replaces older statements where it says so; the older rows are left as they were written.
+
+### Part 1: small security matters
+
+**`POST /services/{id}/check` sends `Cache-Control: no-store`.** The answer describes one moment, so nothing may keep it and show it again. The header is set first in the endpoint, so it is also there on a 404 and on the 409 that the error translation writes afterwards. A 500 goes through the exception handler, which empties the headers and sets its own. This replaces the line "`POST /services/{id}/check` does not send `Cache-Control: no-store`" under "Phase 6, first part". A browser does not normally keep the answer to a POST, so the risk was small; the header states the intent and makes the two check routes alike.
+
+Three tests in `ServiceCheckTests`: `ManualCheckAnswerIsNotStored` (200), `ManualCheckOfMissingServiceIsNotStored` (404) and `OverlappingCheckAnswerIsNotStored` (409). All three were red first, because the header was missing. Mutation: with the line moved to after the check, the 409 test is red and the other two green.
+
+**`UrlSafety`: the check of `UriHostNameType.Unknown`.** What the line stops was looked for with a temporary test of about 1600 odd addresses: an empty host, a single dot, broken IPv6 forms, percent-encoded hosts, and every character from 0 to 0x2FF as a whole host and inside a host. None of them reached the line with `Unknown`: each was either refused by `Uri.TryCreate` or given another type. With the check removed, the whole suite stayed green. The line is kept as an explicit line of defence, and its comment says that no address is known to reach it. No test proves it.
+
+A side finding, not changed here: `http://-/` and `http://_/` get the type `Basic`, pass this line and are accepted as ordinary names. What happens to them at connection time was not run.
+
+**`DiscordWebhookUrl`: the two limits of the ASCII check** are now explained in a comment: the space and everything below it, and everything above `~`, which is DEL and every character outside ASCII. A row with DEL was added to `DiscordWebhookUrlTests`; it was green at once, because no behaviour changed. With the ASCII check removed the whole suite is still green, as noted under "Code style exceptions": the comparison with `AbsoluteUri` stops the same addresses.
+
+**`ServiceLocks`: comments only.** Three comments were corrected and no code was changed.
+
+| Comment | Before | After | Why |
+|---|---|---|---|
+| The class | "Stops the API and the worker from working on the same service" | Names the callers: a check from the API or the worker, an update or a delete | Two requests to the API are stopped as well, and the old text did not say so |
+| `EnterAsync` | "The caller must call Release when done" | Adds that a cancelled wait never took the lock, and that `Release` must then not be called | The old text could be read as "always call Release" |
+| `LockEntry.Gate` | "Disposing it could also fail" | Says that it is a later `Gate.Release` on a disposed semaphore that throws | `Dispose` itself does not fail |
+
+The other comments in the file were read against the code and left as they were. The statement that a `SemaphoreSlim` only needs disposing when `AvailableWaitHandle` has been used comes from the .NET documentation and was not checked again here.
+
+Result: `dotnet build DeadSwitch.slnx` 0 warnings, 0 errors. `dotnet test DeadSwitch.slnx` 1565 passed, 0 failed, 0 skipped, on Windows. Before the part 1561 passed; 4 test cases were added. No package and no migration was added.
+
+Not proven:
+
+- That no address at all can reach the `Unknown` check. Only the forms listed above were tried.
+- The `no-store` header against the real server and a real browser.
