@@ -14,24 +14,28 @@ public class SecurityWarningDiscordTests
 {
     private const string Prefix = "DeadSwitch security warning: ";
 
+    // 2026-11-05T07:15:53Z as seconds since 1970, in Discord's own time tag.
+    private const string Checked = " Checked <t:1793862953:f>.";
+    private static readonly DateTimeOffset CheckedAt = new DateTimeOffset(2026, 11, 5, 7, 15, 53, TimeSpan.Zero);
+
     [Fact]
-    public async Task HeaderMessageNamesTheServiceAndTheHeadersAndNothingElse()
+    public async Task HeaderMessageNamesTheServiceTheHeadersAndTheTime()
     {
         SecurityWarning warning = CreateHeaderWarning("Shop");
 
         string content = await SendAndReadContentAsync(warning);
 
-        Assert.Equal(Prefix + "`Shop` no longer sends: Content-Security-Policy, X-Frame-Options.", content);
+        Assert.Equal(Prefix + "`Shop` no longer sends these security headers: Content-Security-Policy, X-Frame-Options." + Checked, content);
     }
 
     [Fact]
     public async Task RejectedMessageIsAFixedText()
     {
-        SecurityWarning warning = new SecurityWarning(Guid.NewGuid(), "Shop", SecurityWarningKind.CertificateRejected, Array.Empty<string>(), null);
+        SecurityWarning warning = new SecurityWarning(Guid.NewGuid(), "Shop", SecurityWarningKind.CertificateRejected, Array.Empty<string>(), null, CheckedAt);
 
         string content = await SendAndReadContentAsync(warning);
 
-        Assert.Equal(Prefix + "the TLS certificate of `Shop` was rejected.", content);
+        Assert.Equal(Prefix + "`Shop` now has a TLS certificate that is not valid." + Checked, content);
     }
 
     [Theory]
@@ -40,11 +44,11 @@ public class SecurityWarningDiscordTests
     [InlineData(1, "1 day")]
     public async Task ExpiryMessageGivesOnlyTheThreshold(int threshold, string expectedText)
     {
-        SecurityWarning warning = new SecurityWarning(Guid.NewGuid(), "Shop", SecurityWarningKind.CertificateExpiringSoon, Array.Empty<string>(), threshold);
+        SecurityWarning warning = new SecurityWarning(Guid.NewGuid(), "Shop", SecurityWarningKind.CertificateExpiringSoon, Array.Empty<string>(), threshold, CheckedAt);
 
         string content = await SendAndReadContentAsync(warning);
 
-        Assert.Equal(Prefix + "the TLS certificate of `Shop` has at most " + expectedText + " left.", content);
+        Assert.Equal(Prefix + "`Shop` has a TLS certificate with at most " + expectedText + " left." + Checked, content);
     }
 
     [Fact]
@@ -100,7 +104,7 @@ public class SecurityWarningDiscordTests
     {
         string content = await SendAndReadContentAsync(CreateHeaderWarning(name));
 
-        Assert.Equal(Prefix + "`" + name + "` no longer sends: Content-Security-Policy, X-Frame-Options.", content);
+        Assert.Equal(Prefix + "`" + name + "` no longer sends these security headers: Content-Security-Policy, X-Frame-Options." + Checked, content);
     }
 
     [Fact]
@@ -178,7 +182,7 @@ public class SecurityWarningDiscordTests
     [Fact]
     public async Task LongestPossibleMessageStaysWellWithinDiscordsLimit()
     {
-        SecurityWarning warning = new SecurityWarning(Guid.NewGuid(), new string('å', 10000), SecurityWarningKind.HeadersDisappeared, TestSecurityHeaders.AllNames, null);
+        SecurityWarning warning = new SecurityWarning(Guid.NewGuid(), new string('å', 10000), SecurityWarningKind.HeadersDisappeared, TestSecurityHeaders.AllNames, null, CheckedAt);
 
         string content = await SendAndReadContentAsync(warning);
 
@@ -218,7 +222,7 @@ public class SecurityWarningDiscordTests
 
     // The whole chain: the real registration, the real rules and the real message, with a stub as Discord.
     [Fact]
-    public async Task RealNotifierSendsAWarningWithoutTheUrlOrAnyDate()
+    public async Task RealNotifierSendsAWarningWithoutTheUrlOrTheCertificateDate()
     {
         StubDiscordHandler stub = new StubDiscordHandler();
         await using TestApp app = new TestApp("Development", TestWebhook.Url, stub);
@@ -233,7 +237,8 @@ public class SecurityWarningDiscordTests
         first.EnsureSuccessStatusCode();
         Assert.Equal(0, stub.Calls);
 
-        app.Clock.Advance(TimeSpan.FromSeconds(1));
+        // The time of the second check, which is the one that warns.
+        app.Clock.SetUtcNow(CheckedAt);
         app.Probe.Result = TestProbeResults.Response(200, TestProbeResults.HeadersAssessed(TestSecurityHeaders.FrameOptions), TestProbeResults.CertificateValid(notAfter));
         HttpResponseMessage second = await client.PostAsync($"/services/{service.Id}/check", null);
         second.EnsureSuccessStatusCode();
@@ -241,14 +246,16 @@ public class SecurityWarningDiscordTests
         Assert.Equal(1, stub.Calls);
         using JsonDocument document = JsonDocument.Parse(stub.LastBody);
         string content = document.RootElement.GetProperty("content").GetString()!;
-        Assert.Equal(Prefix + "`@everyone` no longer sends: X-Frame-Options.", content);
+        Assert.Equal(Prefix + "`@everyone` no longer sends these security headers: X-Frame-Options." + Checked, content);
+        Assert.DoesNotContain("secret-path", content);
+        Assert.DoesNotContain("example.com", content);
         Assert.Equal(0, document.RootElement.GetProperty("allowed_mentions").GetProperty("parse").GetArrayLength());
     }
 
     private static SecurityWarning CreateHeaderWarning(string name)
     {
         string[] headers = { TestSecurityHeaders.ContentSecurityPolicy, TestSecurityHeaders.FrameOptions };
-        return new SecurityWarning(Guid.NewGuid(), name, SecurityWarningKind.HeadersDisappeared, headers, null);
+        return new SecurityWarning(Guid.NewGuid(), name, SecurityWarningKind.HeadersDisappeared, headers, null, CheckedAt);
     }
 
     private static async Task<string> SendAndReadContentAsync(SecurityWarning warning)

@@ -74,7 +74,7 @@ public sealed class SecurityWarningFinder
             return null;
         }
 
-        return new SecurityWarning(service.Id, service.Name, ToWarningKind(finding), Array.Empty<string>(), null, record.RedirectTargetHost);
+        return new SecurityWarning(service.Id, service.Name, ToWarningKind(finding), Array.Empty<string>(), null, CheckTimeOf(record), record.RedirectTargetHost);
     }
 
     private static SecurityWarningKind ToWarningKind(RedirectFinding finding)
@@ -119,7 +119,7 @@ public sealed class SecurityWarningFinder
             return null;
         }
 
-        return new SecurityWarning(service.Id, service.Name, SecurityWarningKind.HeadersDisappeared, disappeared, null);
+        return new SecurityWarning(service.Id, service.Name, SecurityWarningKind.HeadersDisappeared, disappeared, null, CheckTimeOf(record));
     }
 
     private async Task<SecurityWarning?> FindCertificateWarningAsync(MonitoredService service, CheckRecord record, CancellationToken ct)
@@ -150,7 +150,7 @@ public sealed class SecurityWarningFinder
         {
             if (CertificateWarningRule.IsNewlyRejected(baselineFinding, finding))
             {
-                return new SecurityWarning(service.Id, service.Name, SecurityWarningKind.CertificateRejected, Array.Empty<string>(), null);
+                return new SecurityWarning(service.Id, service.Name, SecurityWarningKind.CertificateRejected, Array.Empty<string>(), null, CheckTimeOf(record));
             }
 
             return null;
@@ -176,7 +176,7 @@ public sealed class SecurityWarningFinder
             return null;
         }
 
-        return new SecurityWarning(service.Id, service.Name, SecurityWarningKind.CertificateExpiringSoon, Array.Empty<string>(), currentThreshold);
+        return new SecurityWarning(service.Id, service.Name, SecurityWarningKind.CertificateExpiringSoon, Array.Empty<string>(), currentThreshold, CheckTimeOf(record));
     }
 
     // Counted from the time of that check, and not from now, so that an earlier check is judged as it
@@ -184,8 +184,13 @@ public sealed class SecurityWarningFinder
     // The ! is safe: this is only called for a check that Classify has called Valid, which means a date.
     private int? ThresholdAtTheTimeOf(CheckRecord record)
     {
-        DateTimeOffset checkedAt = new DateTimeOffset(record.CheckedAtUtc);
-        int daysLeft = CertificateExpiryRule.DaysLeft(record.CertificateNotAfterUtc!.Value, checkedAt);
+        int daysLeft = CertificateExpiryRule.DaysLeft(record.CertificateNotAfterUtc!.Value, CheckTimeOf(record));
         return CertificateWarningRule.ThresholdFor(daysLeft, _settings.CertificateWarningDays);
+    }
+
+    // The time a check started. The record keeps it as a UTC DateTime, and a warning carries it on.
+    private static DateTimeOffset CheckTimeOf(CheckRecord record)
+    {
+        return new DateTimeOffset(record.CheckedAtUtc);
     }
 }

@@ -61,7 +61,7 @@ public class DiscordNotifierTests
     {
         string content = await SendAndReadContentAsync(CreateChange("Shop", ExampleUrl));
 
-        Assert.Equal("DeadSwitch: `Shop` is DOWN (" + FailedChecksText() + "). URL: `https://example.com/health`. Reason: HTTP 500. Time: 2026-11-05T07:15:53Z", content);
+        Assert.Equal("DeadSwitch: `Shop` is DOWN (" + FailedChecksText() + "). Reason: HTTP 500. Checked <t:1793862953:f>.", content);
     }
 
     // Shown for every DOWN alarm, also for a new service, because an alarm now always means that
@@ -107,7 +107,7 @@ public class DiscordNotifierTests
 
         string content = await SendAndReadContentAsync(change);
 
-        Assert.Equal("DeadSwitch: `Shop` is UP. URL: `https://example.com/health`. Time: 2026-11-05T07:15:53Z", content);
+        Assert.Equal("DeadSwitch: `Shop` is UP. Checked <t:1793862953:f>.", content);
     }
 
     [Fact]
@@ -117,7 +117,7 @@ public class DiscordNotifierTests
 
         string content = await SendAndReadContentAsync(change);
 
-        Assert.Equal("DeadSwitch: `Shop` is UP (was DOWN). URL: `https://example.com/health`. Time: 2026-11-05T07:15:53Z", content);
+        Assert.Equal("DeadSwitch: `Shop` is UP (was DOWN). Checked <t:1793862953:f>.", content);
     }
 
     // Proves what is sent. Whether Discord obeys it can only be seen in a manual run.
@@ -168,14 +168,58 @@ public class DiscordNotifierTests
         Assert.Contains("`a b`", content);
     }
 
-    // A query can hold a token, and Discord is a third party that has no reason to see it.
-    [Fact]
-    public async Task QueryIsNotSentToDiscord()
+    // Discord is a third party and the dashboard already shows the address, so no part of it is sent:
+    // not the host, not the path, and not a query that can hold a token.
+    [Theory]
+    [InlineData("https://monitored.example/health-path")]
+    [InlineData("https://monitored.example/health-path?token=secret-marker")]
+    public async Task UrlIsNeverSentToDiscord(string url)
     {
-        string content = await SendAndReadContentAsync(CreateChange("Shop", "https://example.com/health?token=abc"));
+        string content = await SendAndReadContentAsync(CreateChange("Shop", url));
 
-        Assert.Contains("`https://example.com/health`", content);
-        Assert.DoesNotContain("abc", content);
+        AssertHoldsNoPartOfTheUrl(content);
+    }
+
+    [Fact]
+    public async Task LongestUrlIsNeverSentToDiscord()
+    {
+        string start = "https://monitored.example/health-path/";
+        string url = start + new string('b', 2048 - start.Length);
+
+        string content = await SendAndReadContentAsync(CreateChange("Shop", url));
+
+        AssertHoldsNoPartOfTheUrl(content);
+        Assert.DoesNotContain("bbb", content);
+    }
+
+    // Seconds since 1970 in Discord's own tag, which every reader sees in their own time zone. The
+    // time in these tests is 2026-11-05T07:15:53.290Z, and the part of a second is dropped.
+    [Fact]
+    public async Task TimeIsWrittenInDiscordsOwnFormat()
+    {
+        string content = await SendAndReadContentAsync(CreateChange("Shop", ExampleUrl));
+
+        Assert.EndsWith(" Checked <t:1793862953:f>.", content);
+        Assert.DoesNotContain("2026", content);
+        Assert.DoesNotContain("Time:", content);
+    }
+
+    // A name that looks like a time tag must be shown as the letters it is, and not as a time.
+    [Fact]
+    public async Task ATimeTagInANameStaysInsideTheCodeFormat()
+    {
+        string content = await SendAndReadContentAsync(CreateChange("<t:0:f>", ExampleUrl));
+
+        Assert.StartsWith("DeadSwitch: `<t:0:f>` is DOWN", content);
+    }
+
+    [Fact]
+    public async Task MessageIsOneLine()
+    {
+        string content = await SendAndReadContentAsync(CreateChange("Shop", ExampleUrl));
+
+        Assert.DoesNotContain("\n", content);
+        Assert.DoesNotContain("\r", content);
     }
 
     [Fact]
@@ -205,17 +249,6 @@ public class DiscordNotifierTests
         string content = await SendAndReadContentAsync(CreateChange(new string('a', 100), ExampleUrl));
 
         Assert.Contains("`" + new string('a', 100) + "`", content);
-    }
-
-    [Fact]
-    public async Task UrlIsCutAtItsLimit()
-    {
-        string host = "https://example.com/";
-        string url = host + new string('b', 300);
-
-        string content = await SendAndReadContentAsync(CreateChange("Shop", url));
-
-        Assert.Contains("`" + host + new string('b', 300 - host.Length) + "...`", content);
     }
 
     // An emoji is two chars in C#. Half of one would reach Discord as a broken character.
@@ -286,6 +319,15 @@ public class DiscordNotifierTests
         DiscordNotifier notifier = CreateNotifier(new StubDiscordHandler(), TestWebhook.Url);
 
         Assert.Equal(TimeSpan.FromSeconds(5), notifier.SendTimeout);
+    }
+
+    private static void AssertHoldsNoPartOfTheUrl(string content)
+    {
+        Assert.DoesNotContain("monitored.example", content);
+        Assert.DoesNotContain("health-path", content);
+        Assert.DoesNotContain("secret-marker", content);
+        Assert.DoesNotContain("http", content);
+        Assert.DoesNotContain("URL", content);
     }
 
     private static async Task<string> SendAndReadContentAsync(StatusChange change)

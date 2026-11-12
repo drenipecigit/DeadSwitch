@@ -13,6 +13,10 @@ namespace DeadSwitch.Tests;
 public class RedirectWarningDiscordTests
 {
     private const string Prefix = "DeadSwitch security warning: ";
+
+    // 2026-11-05T07:15:53Z as seconds since 1970, in Discord's own time tag.
+    private const string Checked = " Checked <t:1793862953:f>.";
+    private static readonly DateTimeOffset CheckedAt = new DateTimeOffset(2026, 11, 5, 7, 15, 53, TimeSpan.Zero);
     private const string HostileLocation = "https://user-marker:password-marker@other.example/path-marker?query-marker#fragment-marker";
 
     private static readonly string[] Markers =
@@ -29,7 +33,7 @@ public class RedirectWarningDiscordTests
     {
         string content = await SendAndReadContentAsync(CreateWarning("Shop", SecurityWarningKind.RedirectToOtherHost, "other.example"));
 
-        Assert.Equal(Prefix + "`Shop` now redirects to another domain: `other.example`.", content);
+        Assert.Equal(Prefix + "`Shop` now redirects to another domain: `other.example`." + Checked, content);
     }
 
     [Fact]
@@ -37,7 +41,7 @@ public class RedirectWarningDiscordTests
     {
         string content = await SendAndReadContentAsync(CreateWarning("Shop", SecurityWarningKind.RedirectToInternalTarget, null));
 
-        Assert.Equal(Prefix + "`Shop` now redirects to a private or internal address.", content);
+        Assert.Equal(Prefix + "`Shop` now redirects to a private or internal address." + Checked, content);
     }
 
     [Fact]
@@ -45,7 +49,7 @@ public class RedirectWarningDiscordTests
     {
         string content = await SendAndReadContentAsync(CreateWarning("Shop", SecurityWarningKind.RedirectUnreadable, null));
 
-        Assert.Equal(Prefix + "`Shop` now sends a redirect whose target cannot be read.", content);
+        Assert.Equal(Prefix + "`Shop` now sends a redirect whose target cannot be read." + Checked, content);
     }
 
     // The parser never lets these through. This proves the second layer, if that one ever fails.
@@ -113,7 +117,8 @@ public class RedirectWarningDiscordTests
         first.EnsureSuccessStatusCode();
         Assert.Equal(0, stub.Calls);
 
-        app.Clock.Advance(TimeSpan.FromSeconds(1));
+        // The time of the second check, which is the one that warns.
+        app.Clock.SetUtcNow(CheckedAt);
         string[] values = { HostileLocation };
         RedirectTargetCheck? target = RedirectTargetParser.Parse(new Uri("https://monitored.test/"), values);
         app.Probe.Result = new ProbeResult(ServiceStatus.Up, 302, 12, null, null, null, target);
@@ -122,7 +127,7 @@ public class RedirectWarningDiscordTests
 
         Assert.Equal(1, stub.Calls);
         using JsonDocument document = JsonDocument.Parse(stub.LastBody);
-        Assert.Equal(Prefix + "`Shop` now redirects to another domain: `other.example`.", document.RootElement.GetProperty("content").GetString());
+        Assert.Equal(Prefix + "`Shop` now redirects to another domain: `other.example`." + Checked, document.RootElement.GetProperty("content").GetString());
         Assert.Equal(0, document.RootElement.GetProperty("allowed_mentions").GetProperty("parse").GetArrayLength());
 
         string checkAnswer = await second.Content.ReadAsStringAsync();
@@ -141,7 +146,7 @@ public class RedirectWarningDiscordTests
 
     private static SecurityWarning CreateWarning(string name, SecurityWarningKind kind, string? host)
     {
-        return new SecurityWarning(Guid.NewGuid(), name, kind, Array.Empty<string>(), null, host);
+        return new SecurityWarning(Guid.NewGuid(), name, kind, Array.Empty<string>(), null, CheckedAt, host);
     }
 
     private static async Task<string> SendAndReadContentAsync(SecurityWarning warning)

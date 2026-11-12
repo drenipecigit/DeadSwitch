@@ -141,10 +141,10 @@ Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, s
 
 ## Latest verified result
 
-Date: 2026-11-12, on `feat/finish-a`, after part 1.
+Date: 2026-11-12, on `feat/finish-a`, after part 2.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
-- `dotnet test DeadSwitch.slnx`: 1565 passed, 0 failed, 0 skipped, on Windows. See "Finish A".
+- `dotnet test DeadSwitch.slnx`: 1573 passed, 0 failed, 0 skipped, on Windows. See "Finish A".
 
 Before this, on the same day:
 
@@ -1898,3 +1898,55 @@ Not proven:
 
 - That no address at all can reach the `Unknown` check. Only the forms listed above were tried.
 - The `no-store` header against the real server and a real browser.
+
+### Part 2: the Discord texts
+
+Every message now answers three questions in one line of plain text: which service, what happened, and when. Nothing that the dashboard already shows better is repeated.
+
+| Kind | Text, for the service `Shop` checked at 2026-11-05T07:15:53Z |
+|---|---|
+| DOWN | ``DeadSwitch: `Shop` is DOWN (2 failed checks in a row). Reason: HTTP 500. Checked <t:1793862953:f>.`` |
+| UP | ``DeadSwitch: `Shop` is UP (was DOWN). Checked <t:1793862953:f>.`` |
+| Headers | ``DeadSwitch security warning: `Shop` no longer sends these security headers: Content-Security-Policy, X-Frame-Options. Checked <t:1793862953:f>.`` |
+| Certificate rejected | ``DeadSwitch security warning: `Shop` now has a TLS certificate that is not valid. Checked <t:1793862953:f>.`` |
+| Certificate expiring | ``DeadSwitch security warning: `Shop` has a TLS certificate with at most 14 days left. Checked <t:1793862953:f>.`` |
+| Redirect to another domain | ``DeadSwitch security warning: `Shop` now redirects to another domain: `other.example`. Checked <t:1793862953:f>.`` |
+| Redirect to an internal target | ``DeadSwitch security warning: `Shop` now redirects to a private or internal address. Checked <t:1793862953:f>.`` |
+| Redirect that cannot be read | ``DeadSwitch security warning: `Shop` now sends a redirect whose target cannot be read. Checked <t:1793862953:f>.`` |
+
+What changed:
+
+- **The URL is no longer sent in a DOWN or UP message.** Discord is a third party and the dashboard shows the address. `RemoveEverythingAfterThePath` and the URL limit of 300 are removed with it. `StatusChange.ServiceUrl` is still there but `DiscordMessage` no longer reads it.
+- **The time is Discord's own tag, `<t:SECONDS:f>`,** with the seconds since 1970 in UTC. Discord shows it as a date and a time of day in each reader's own time zone. It replaces the ISO text that ended with `Z`. The time is when the check started, so the word is `Checked` and not `since`. Parts of a second are dropped.
+- **The security warnings carry the time as well.** `SecurityWarning` has the new value `CheckedAt`, which `SecurityWarningFinder` takes from the check record. Application carries the time and Infrastructure formats it.
+- **Every security warning starts with the service's name.** The header and certificate texts were reworded; the three redirect texts only got the time.
+
+Unchanged: the empty `allowed_mentions.parse`, `FormatAsCode`, the name limit of 100 in Discord (the validation limit of 200 is untouched), and the redirect host as inline code with no link. The tag is built from our own clock, holds only digits and stands outside the code format. No new value from a monitored site reaches Discord.
+
+This replaces these older statements: "the times ended with `Z`" in the manual run of 2026-11-05 describes the old text; "The name and URL come from the user" and "A query is removed" under "The Discord webhook" (only the name is sent now); and "no URL, date or number of days left is sent" under "The security warnings" (the time of the check is now sent; still no URL, no certificate date and no number of days left). The text `no longer sends`, `was rejected` and `has at most 365 days left` in "Not run manually" are the old wordings.
+
+Tests: 3 exact texts in `DiscordNotifierTests`, 5 in `SecurityWarningDiscordTests` and 4 in `RedirectWarningDiscordTests` were updated. `QueryIsNotSentToDiscord` and `UrlIsCutAtItsLimit` were replaced by `UrlIsNeverSentToDiscord` (2 cases) and `LongestUrlIsNeverSentToDiscord`, which require that no host, path, query or scheme is in the message. New: `TimeIsWrittenInDiscordsOwnFormat`, `ATimeTagInANameStaysInsideTheCodeFormat`, `MessageIsOneLine`, and the class `SecurityWarningTimeTests` with one test per kind of warning. `RealNotifierSendsAWarningWithoutTheUrlOrAnyDate` is renamed to `RealNotifierSendsAWarningWithoutTheUrlOrTheCertificateDate`, and `HeaderMessageNamesTheServiceAndTheHeadersAndNothingElse` to `HeaderMessageNamesTheServiceTheHeadersAndTheTime`.
+
+Red run, against a skeleton where the new value existed but was empty and the texts were the old ones: 23 of 1573 failed, all on assertions. `ATimeTagInANameStaysInsideTheCodeFormat` and `MessageIsOneLine` were green from the start and are proven by mutations 9 and 10 instead.
+
+| Mutation | Red |
+|---|---|
+| 1. The URL is put back in the status message | 7, among them both `UrlIsNeverSentToDiscord` cases and `LongestUrlIsNeverSentToDiscord` |
+| 2. An ISO time instead of the tag | 16: `TimeIsWrittenInDiscordsOwnFormat` and every exact text |
+| 3. Milliseconds instead of seconds | The same 16 |
+| 4. The tag inside the code format, in the status message | 4 |
+| 5. The finder gives every warning an empty time | 6: the four `SecurityWarningTimeTests` and the two tests of the whole chain |
+| 6. No time in the security warnings | 12: every exact warning text |
+| 7. No `(was DOWN)` | 2 |
+| 8. No count of failed checks | 3 |
+| 9. The name without the code format, in the status message | 17, among them `ATimeTagInANameStaysInsideTheCodeFormat` |
+| 10. A line break before `Checked` | 4, among them `MessageIsOneLine` |
+
+After each mutation the file was copied back and compared byte for byte.
+
+Result: `dotnet build DeadSwitch.slnx` 0 warnings, 0 errors. `dotnet test DeadSwitch.slnx` 1573 passed, 0 failed, 0 skipped, on Windows. Before the part 1565 passed; 2 tests were replaced and 10 test cases added. No package and no migration was added.
+
+Not proven:
+
+- How Discord shows `<t:...:f>` in a webhook message. The tests prove what is sent. The format was written from memory of Discord's documentation, which was not read again here.
+- That the tag stays unformatted when a name holds one. The test proves that it is sent inside the code format.

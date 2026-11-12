@@ -6,14 +6,14 @@ using DeadSwitch.Domain;
 
 namespace DeadSwitch.Infrastructure.Notifications;
 
-// The JSON body of a Discord webhook. The name and the URL come from the user, so they are treated as
-// untrusted text here: they must not be able to ping anyone or change how the message looks.
+// The JSON body of a Discord webhook. The name comes from the user, so it is treated as untrusted text
+// here: it must not be able to ping anyone or change how the message looks. The service's URL is never
+// sent: Discord is a third party, and the dashboard already shows the address.
 internal sealed class DiscordMessage
 {
-    // Discord allows 2000 characters in a message. A URL may be 2048 long, so it must be cut. These
-    // limits leave a wide margin, because Discord does not say whether it counts characters or bytes.
+    // Discord allows 2000 characters in a message. A name may be 200 long, so it is cut. The limit
+    // leaves a wide margin, because Discord does not say whether it counts characters or bytes.
     private const int MaxNameLength = 100;
-    private const int MaxUrlLength = 300;
 
     // The longest a host name can be.
     private const int MaxHostLength = 253;
@@ -33,9 +33,7 @@ internal sealed class DiscordMessage
     public static DiscordMessage Create(StatusChange change)
     {
         string name = FormatAsCode(change.ServiceName, MaxNameLength);
-        string url = FormatAsCode(RemoveEverythingAfterThePath(change.ServiceUrl), MaxUrlLength);
         string status = ToText(change.NewStatus);
-        string time = change.CheckedAt.UtcDateTime.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
 
         // Built only from our own values: the constant and our status. Nothing here comes from the site.
         // A DOWN alarm is always sent after several failed checks in a row, with or without an
@@ -51,7 +49,7 @@ internal sealed class DiscordMessage
             explanation = " (was " + ToText(change.PreviousStatus.Value) + ")";
         }
 
-        string content = "DeadSwitch: " + name + " is " + status + explanation + ". URL: " + url + ".";
+        string content = "DeadSwitch: " + name + " is " + status + explanation + ".";
 
         // FailureReason only ever holds fixed texts from the probe, so it needs no cleaning.
         if (change.FailureReason != null)
@@ -63,7 +61,7 @@ internal sealed class DiscordMessage
             }
         }
 
-        content += " Time: " + time;
+        content += " Checked " + FormatAsDiscordTime(change.CheckedAt) + ".";
 
         return new DiscordMessage(content);
     }
@@ -72,6 +70,7 @@ internal sealed class DiscordMessage
     // go through the same cleaning as above. The host has already passed the allowlist in
     // RedirectTargetParser, so this is the second layer. It is written without a scheme and as inline
     // code, so Discord makes no link and fetches no preview. The empty allowed_mentions stops every ping.
+    // Every text starts with the name, so that a reader sees at once which service it is about.
     public static DiscordMessage Create(SecurityWarning warning)
     {
         string name = FormatAsCode(warning.ServiceName, MaxNameLength);
@@ -79,11 +78,11 @@ internal sealed class DiscordMessage
 
         if (warning.Kind == SecurityWarningKind.HeadersDisappeared)
         {
-            text = name + " no longer sends: " + string.Join(SecurityHeaderRule.Separator, warning.DisappearedHeaders) + ".";
+            text = name + " no longer sends these security headers: " + string.Join(SecurityHeaderRule.Separator, warning.DisappearedHeaders) + ".";
         }
         else if (warning.Kind == SecurityWarningKind.CertificateRejected)
         {
-            text = "the TLS certificate of " + name + " was rejected.";
+            text = name + " now has a TLS certificate that is not valid.";
         }
         else if (warning.Kind == SecurityWarningKind.RedirectToOtherHost)
         {
@@ -99,8 +98,10 @@ internal sealed class DiscordMessage
         }
         else
         {
-            text = "the TLS certificate of " + name + " has at most " + DaysText(warning.ThresholdDays) + " left.";
+            text = name + " has a TLS certificate with at most " + DaysText(warning.ThresholdDays) + " left.";
         }
+
+        text += " Checked " + FormatAsDiscordTime(warning.CheckedAt) + ".";
 
         return new DiscordMessage("DeadSwitch security warning: " + text);
     }
@@ -120,17 +121,13 @@ internal sealed class DiscordMessage
         return status.ToString().ToUpperInvariant();
     }
 
-    // Security: a query can hold a token, and Discord has no reason to see it. Credentials are not
-    // accepted by UrlSafety, but an old row could hold them, so they are left out here too.
-    private static string RemoveEverythingAfterThePath(string url)
+    // Discord shows <t:SECONDS:f> as a date and a time of day in each reader's own time zone, where
+    // SECONDS is the number of seconds since 1970 in UTC. Security: the tag is built from our own clock
+    // and holds only digits. It is written outside the code format, or Discord would show it as letters.
+    private static string FormatAsDiscordTime(DateTimeOffset time)
     {
-        Uri? uri;
-        if (!Uri.TryCreate(url, UriKind.Absolute, out uri))
-        {
-            return "(not shown)";
-        }
-
-        return uri.GetComponents(UriComponents.SchemeAndServer | UriComponents.Path, UriFormat.UriEscaped);
+        string seconds = time.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
+        return "<t:" + seconds + ":f>";
     }
 
     // Security: Discord shows inline code as it is written, so markdown and links in the text do nothing,
