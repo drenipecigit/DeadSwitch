@@ -141,7 +141,7 @@ Status is stored as the text `UP`, `DOWN` or `UNKNOWN`, as it always has been, s
 
 ## Latest verified result
 
-Date: 2026-11-12, on `feat/finish-a`, after part 3.
+Date: 2026-11-12, on `feat/finish-a`, after part 4.
 
 - `dotnet build DeadSwitch.slnx`: 0 warnings, 0 errors.
 - `dotnet test DeadSwitch.slnx`: 1582 passed, 0 failed, 0 skipped, on Windows. See "Finish A".
@@ -1307,7 +1307,7 @@ Dependency injection lifetimes were reviewed by reading the code only.
 | Certificate expiry saved per check, days left on the dashboard | Done | Proven by tests against a local server and by the owner's run against real websites in Chrome. Not confirmed manually: `Expired` on the screen, revocation, and the worker with Discord turned on. The cause of the timeouts in that run has not been established |
 | Warnings when security gets worse | Done | Proven by tests with a fake probe, a fake notifier and a stub. Manual test passed on 2026-11-09; see "Not run manually" |
 | Redirect target saved per check, with a warning when it moves to another domain (phase 3 task 4, not part of the MVP) | Done | Proven by tests with a fake probe, a fake notifier, a stub and a local raw server. Manual test passed on 2026-11-10 for `OTHER_HOST`; `INTERNAL_TARGET` and `UNREADABLE` are proven by tests only. See "Not run manually" |
-| README | Missing | |
+| README | Done | Written on `feat/finish-a`. Docker is not described, because it is not built, and the screenshot is still to be added. See "Finish A" |
 | GitHub Actions | Partial | The workflow file and its text tests exist on `ci/github-actions`. It has never run on GitHub, and no test has ever run on Linux. See "Phase 4, first part: GitHub Actions" |
 
 ## Notification rules
@@ -1979,3 +1979,23 @@ Not proven:
 - How the page looks. The tests of the style sheet read it as text: they prove that a rule is there, not what a browser does with it. The narrow layout, the limit of 600 px and the colours in light and dark mode are only shown by the owner's run in a browser.
 - That the summary is really emptied on every update. The test only finds the line in the script.
 - How a screen reader reads the summary now that it is several pieces of text.
+
+### Part 4: the README
+
+`README.md` is new. It says what the application does, how to run it locally and how to run the tests, lists the settings and the endpoints, and describes the threat model: what the API lets a caller do, why the application is locked to the owner's computer (`localhost`, `LocalOnlyCheck`, `AllowedHosts`), the two layers of the SSRF protection, the Content Security Policy and the block of requests from other sites, how the webhook address is kept secret, and what is not protected. It has a section on continuous integration and a short list of known limitations. It refers to `docs/dashboard.png`, which the owner adds after the manual test; the image link is broken until then.
+
+Docker is not described, because it is not built. The README says so.
+
+The section on continuous integration separates two things. What the workflow file holds is proven by `WorkflowFileTests`. The repository settings on GitHub are not files: they were checked by hand by the owner on 2026-11-12 and no test can prove them. A cooldown is explained as a concept only; no tool in the repository enforces one.
+
+Every statement was read against the code or a test. The file was searched for local paths and for words that must not be in the repository, with no match.
+
+Result: `dotnet build DeadSwitch.slnx` 0 warnings, 0 errors. `dotnet test DeadSwitch.slnx` 1582 passed, 0 failed, 0 skipped, on Windows. No test was added: no test reads the README.
+
+Not proven:
+
+- The commands in the README were not run from the README as written. The same commands are used in this file and in earlier manual runs.
+- The repository settings on GitHub, as said above.
+- That the screenshot shows what the text says. It does not exist yet.
+
+**Next step:** the owner runs the manual test of `feat/finish-a` (the `no-store` header, a real DOWN and UP message and a security warning in Discord, and the dashboard in a browser, also in a narrow window), adds the screenshot, then reviews and merges.
